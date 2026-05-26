@@ -164,13 +164,13 @@ jobs:
       - name: Debug GitHub token auth
         if: steps.sync.outputs.pr_required == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.SYNC_WORKFLOW_TOKEN }}
         run: gh auth status
 
       - name: Open sync pull request
         if: steps.sync.outputs.pr_required == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.SYNC_WORKFLOW_TOKEN }}
           TAG: ${{ steps.release.outputs.tag }}
           PR_BRANCH: ${{ steps.sync.outputs.pr_branch }}
           PR_REASON: ${{ steps.sync.outputs.pr_reason }}
