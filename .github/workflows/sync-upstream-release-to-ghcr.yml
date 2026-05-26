@@ -161,11 +161,6 @@ jobs:
           echo "branch=${DOWNSTREAM_BRANCH}" >> "${GITHUB_OUTPUT}"
           echo "commit=${upstream_commit}" >> "${GITHUB_OUTPUT}"
 
-      - name: Debug GitHub token auth
-        if: steps.sync.outputs.pr_required == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.SYNC_WORKFLOW_TOKEN }}
-        run: gh auth status
 
       - name: Open sync pull request
         if: steps.sync.outputs.pr_required == 'true'
