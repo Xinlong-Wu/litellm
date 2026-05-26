@@ -165,14 +165,23 @@ jobs:
       - name: Open sync pull request
         if: steps.sync.outputs.pr_required == 'true'
         env:
-          GH_TOKEN: ${{ secrets.SYNC_WORKFLOW_TOKEN }}
+          GH_TOKEN: ${{ secrets.SYNC_WORKFLOW_TOKEN || github.token }}
           TAG: ${{ steps.release.outputs.tag }}
           PR_BRANCH: ${{ steps.sync.outputs.pr_branch }}
           PR_REASON: ${{ steps.sync.outputs.pr_reason }}
           CONFLICT_FILES: ${{ steps.sync.outputs.conflict_files }}
         run: |
-          pr_head="${GITHUB_REPOSITORY_OWNER}:${PR_BRANCH}"
-          existing_pr="$(gh pr list --head "${pr_head}" --base "${DOWNSTREAM_BRANCH}" --json number --jq '.[0].number')"
+          pr_head="${PR_BRANCH}"
+
+          existing_pr="$(
+            gh pr list \
+              --repo "${GITHUB_REPOSITORY}" \
+              --head "${pr_head}" \
+              --base "${DOWNSTREAM_BRANCH}" \
+              --json number \
+              --jq '.[0].number // empty'
+          )"
+
           if [ -n "${existing_pr}" ]; then
             echo "Sync pull request already exists for ${pr_head}."
             exit 0
@@ -197,6 +206,7 @@ jobs:
           fi
 
           gh pr create \
+            --repo "${GITHUB_REPOSITORY}" \
             --base "${DOWNSTREAM_BRANCH}" \
             --head "${pr_head}" \
             --title "Sync upstream LiteLLM ${TAG}" \
