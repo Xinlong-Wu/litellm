@@ -34,6 +34,7 @@ jobs:
     permissions:
       contents: write
       packages: write
+      pull-requests: write
     steps:
       - name: Resolve upstream release
         id: release
@@ -84,14 +85,58 @@ jobs:
           if git merge-base --is-ancestor "${upstream_commit}" HEAD; then
             echo "Downstream ${DOWNSTREAM_BRANCH} already contains upstream release ${TAG}."
           else
-            git merge --no-edit "refs/tags/${TAG}"
+            if ! git merge --no-edit "refs/tags/${TAG}"; then
+              conflict_files="$(git diff --name-only --diff-filter=U | sed 's/^/- /')"
+              git merge --abort
+
+              sync_branch="upstream-release/${TAG}"
+              git checkout -B "${sync_branch}" "${upstream_commit}"
+              git push origin "HEAD:refs/heads/${sync_branch}" --force
+
+              {
+                echo "conflict=true"
+                echo "conflict_branch=${sync_branch}"
+                echo "conflict_files<<EOF"
+                echo "${conflict_files}"
+                echo "EOF"
+              } >> "${GITHUB_OUTPUT}"
+
+              exit 0
+            fi
             git push origin "HEAD:refs/heads/${DOWNSTREAM_BRANCH}"
           fi
 
+          echo "conflict=false" >> "${GITHUB_OUTPUT}"
           echo "branch=${DOWNSTREAM_BRANCH}" >> "${GITHUB_OUTPUT}"
           echo "commit=${upstream_commit}" >> "${GITHUB_OUTPUT}"
 
+      - name: Open sync pull request
+        if: steps.sync.outputs.conflict == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release.outputs.tag }}
+          CONFLICT_BRANCH: ${{ steps.sync.outputs.conflict_branch }}
+          CONFLICT_FILES: ${{ steps.sync.outputs.conflict_files }}
+        run: |
+          existing_pr="$(gh pr list --head "${CONFLICT_BRANCH}" --base "${DOWNSTREAM_BRANCH}" --json number --jq '.[0].number')"
+          if [ -n "${existing_pr}" ]; then
+            echo "Sync pull request already exists for ${CONFLICT_BRANCH}."
+            exit 0
+          fi
+
+          gh pr create \
+            --base "${DOWNSTREAM_BRANCH}" \
+            --head "${CONFLICT_BRANCH}" \
+            --title "Sync upstream LiteLLM ${TAG}" \
+            --body "Automatic merge of upstream release ${TAG} into ${DOWNSTREAM_BRANCH} had conflicts.
+
+          Conflicted files:
+          ${CONFLICT_FILES}
+
+          Resolve this PR manually, then rerun the workflow to build and push the Docker image."
+
       - name: Checkout synced downstream branch
+        if: steps.sync.outputs.conflict != 'true'
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           ref: ${{ steps.sync.outputs.branch }}
@@ -99,6 +144,7 @@ jobs:
           persist-credentials: false
 
       - name: Prepare image metadata
+        if: steps.sync.outputs.conflict != 'true'
         id: image
         run: |
           owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
@@ -106,6 +152,7 @@ jobs:
           echo "image=${image}" >> "${GITHUB_OUTPUT}"
 
       - name: Log in to GHCR
+        if: steps.sync.outputs.conflict != 'true'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -113,6 +160,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Check existing image
+        if: steps.sync.outputs.conflict != 'true'
         id: existing
         env:
           FORCE_REBUILD: ${{ github.event_name == 'workflow_dispatch' && inputs.force_rebuild || false }}
@@ -127,18 +175,18 @@ jobs:
           fi
 
       - name: Free up disk space
-        if: steps.existing.outputs.exists != 'true'
+        if: steps.sync.outputs.conflict != 'true' && steps.existing.outputs.exists != 'true'
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost
           sudo apt-get clean
           df -h /
 
       - name: Set up Docker Buildx
-        if: steps.existing.outputs.exists != 'true'
+        if: steps.sync.outputs.conflict != 'true' && steps.existing.outputs.exists != 'true'
         uses: docker/setup-buildx-action@v4
 
       - name: Build and push Docker image
-        if: steps.existing.outputs.exists != 'true'
+        if: steps.sync.outputs.conflict != 'true' && steps.existing.outputs.exists != 'true'
         uses: docker/build-push-action@v7
         with:
           context: .
