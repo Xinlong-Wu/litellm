@@ -85,41 +85,74 @@ jobs:
           git checkout -B "${DOWNSTREAM_BRANCH}" "origin/${DOWNSTREAM_BRANCH}"
 
           upstream_commit="$(git rev-list -n 1 "refs/tags/${TAG}")"
+          synced_commit="$(git log --fixed-strings --grep="Upstream commit: ${upstream_commit}" -n 1 --format=%H)"
+          sync_branch="upstream-release/${TAG}"
 
-          if git merge-base --is-ancestor "${upstream_commit}" HEAD; then
+          commit_sync() {
+            git commit --allow-empty \
+              -m "Sync upstream LiteLLM ${TAG}" \
+              -m "Upstream commit: ${upstream_commit}" \
+              -m "The .github/workflows directory is intentionally kept from ${DOWNSTREAM_BRANCH}."
+          }
+
+          write_pr_outputs() {
+            reason="$1"
+            conflicts="${2:-}"
+            {
+              echo "pr_required=true"
+              echo "pr_branch=${sync_branch}"
+              echo "pr_reason=${reason}"
+              echo "conflict_files<<EOF"
+              echo "${conflicts}"
+              echo "EOF"
+            } >> "${GITHUB_OUTPUT}"
+          }
+
+          push_pr_branch() {
+            git checkout -B "${sync_branch}"
+            git push origin "HEAD:refs/heads/${sync_branch}" --force
+          }
+
+          if git merge-base --is-ancestor "${upstream_commit}" HEAD || [ -n "${synced_commit}" ]; then
             echo "Downstream ${DOWNSTREAM_BRANCH} already contains upstream release ${TAG}."
           else
-            if ! git merge --no-edit "refs/tags/${TAG}"; then
+            if ! git merge --squash --no-commit "refs/tags/${TAG}"; then
               conflict_files="$(git diff --name-only --diff-filter=U | sed 's/^/- /')"
-              git merge --abort
+              git restore --source=HEAD --staged --worktree -- .github/workflows || true
 
-              sync_branch="upstream-release/${TAG}"
-              git checkout -B "${sync_branch}" "${upstream_commit}"
-              git push origin "HEAD:refs/heads/${sync_branch}" --force
+              conflicted_non_workflow_files="$(git diff --name-only --diff-filter=U | grep -v '^.github/workflows/' || true)"
+              if [ -n "${conflicted_non_workflow_files}" ]; then
+                while IFS= read -r path; do
+                  git checkout --theirs -- "${path}" || git rm -f -- "${path}"
+                  git add -A -- "${path}"
+                done <<< "${conflicted_non_workflow_files}"
+              fi
 
-              {
-                echo "pr_required=true"
-                echo "pr_branch=${sync_branch}"
-                echo "pr_reason=Automatic merge of upstream release ${TAG} into ${DOWNSTREAM_BRANCH} had conflicts."
-                echo "conflict_files<<EOF"
-                echo "${conflict_files}"
-                echo "EOF"
-              } >> "${GITHUB_OUTPUT}"
+              remaining_conflicts="$(git diff --name-only --diff-filter=U || true)"
+              if [ -n "${remaining_conflicts}" ]; then
+                pr_reason="Automatic merge of upstream release ${TAG} into ${DOWNSTREAM_BRANCH} had conflicts that could not be fully auto-staged. The PR branch uses upstream content with downstream workflows restored."
+                pr_conflicts="$(printf "%s\n- Remaining conflicts after auto-stage attempt:\n%s" "${conflict_files}" "$(echo "${remaining_conflicts}" | sed 's/^/- /')")"
+                git reset --hard "origin/${DOWNSTREAM_BRANCH}"
+                git checkout -B "${sync_branch}" "origin/${DOWNSTREAM_BRANCH}"
+                git diff --binary HEAD "refs/tags/${TAG}" -- . ':(exclude).github/workflows' | git apply --index
+                commit_sync
+                git push origin "HEAD:refs/heads/${sync_branch}" --force
+                write_pr_outputs "${pr_reason}" "${pr_conflicts}"
+                exit 0
+              fi
 
+              commit_sync
+              push_pr_branch
+              write_pr_outputs "Automatic merge of upstream release ${TAG} into ${DOWNSTREAM_BRANCH} had conflicts. Non-workflow conflicts were staged with upstream content for review." "${conflict_files}"
               exit 0
             fi
 
+            git restore --source=HEAD --staged --worktree -- .github/workflows || true
+            commit_sync
+
             if ! git push origin "HEAD:refs/heads/${DOWNSTREAM_BRANCH}"; then
-              sync_branch="upstream-release/${TAG}"
-              git push origin "HEAD:refs/heads/${sync_branch}" --force
-
-              {
-                echo "pr_required=true"
-                echo "pr_branch=${sync_branch}"
-                echo "pr_reason=Automatic merge of upstream release ${TAG} succeeded, but pushing directly to ${DOWNSTREAM_BRANCH} failed."
-                echo "conflict_files="
-              } >> "${GITHUB_OUTPUT}"
-
+              push_pr_branch
+              write_pr_outputs "Automatic merge of upstream release ${TAG} succeeded, but pushing directly to ${DOWNSTREAM_BRANCH} failed."
               exit 0
             fi
           fi
@@ -137,27 +170,34 @@ jobs:
           PR_REASON: ${{ steps.sync.outputs.pr_reason }}
           CONFLICT_FILES: ${{ steps.sync.outputs.conflict_files }}
         run: |
-          existing_pr="$(gh pr list --head "${PR_BRANCH}" --base "${DOWNSTREAM_BRANCH}" --json number --jq '.[0].number')"
+          pr_head="${GITHUB_REPOSITORY_OWNER}:${PR_BRANCH}"
+          existing_pr="$(gh pr list --head "${pr_head}" --base "${DOWNSTREAM_BRANCH}" --json number --jq '.[0].number')"
           if [ -n "${existing_pr}" ]; then
-            echo "Sync pull request already exists for ${PR_BRANCH}."
+            echo "Sync pull request already exists for ${pr_head}."
             exit 0
           fi
 
-          body="${PR_REASON}
+          body="$(cat <<EOF
+          ${PR_REASON}
 
-          Resolve or review this PR, merge it into ${DOWNSTREAM_BRANCH}, then rerun the workflow to build and push the Docker image."
+          Resolve or review this PR, merge it into ${DOWNSTREAM_BRANCH}, then rerun the workflow to build and push the Docker image.
+          EOF
+          )"
           if [ -n "${CONFLICT_FILES}" ]; then
-            body="${PR_REASON}
+            body="$(cat <<EOF
+          ${PR_REASON}
 
           Conflicted files:
           ${CONFLICT_FILES}
 
-          Resolve this PR manually, merge it into ${DOWNSTREAM_BRANCH}, then rerun the workflow to build and push the Docker image."
+          Resolve this PR manually, merge it into ${DOWNSTREAM_BRANCH}, then rerun the workflow to build and push the Docker image.
+          EOF
+          )"
           fi
 
           gh pr create \
             --base "${DOWNSTREAM_BRANCH}" \
-            --head "${PR_BRANCH}" \
+            --head "${pr_head}" \
             --title "Sync upstream LiteLLM ${TAG}" \
             --body "${body}"
 
