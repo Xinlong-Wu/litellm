@@ -165,7 +165,8 @@ jobs:
       - name: Open sync pull request
         if: steps.sync.outputs.pr_required == 'true'
         env:
-          GH_TOKEN: ${{ secrets.SYNC_WORKFLOW_TOKEN || github.token }}
+          # GH_TOKEN: ${{ secrets.SYNC_WORKFLOW_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}
           PR_BRANCH: ${{ steps.sync.outputs.pr_branch }}
           PR_REASON: ${{ steps.sync.outputs.pr_reason }}
