@@ -1,0 +1,211 @@
+name: Sync Upstream Release to GHCR
+
+on:
+  schedule:
+    - cron: "0 4 */3 * *"
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: "Upstream LiteLLM release tag to build. Leave empty to use the latest release."
+        required: false
+        type: string
+      force_rebuild:
+        description: "Rebuild and push even if the GHCR tag already exists."
+        required: false
+        default: false
+        type: boolean
+
+permissions: {}
+
+concurrency:
+  group: sync-upstream-release-to-ghcr
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPOSITORY: BerriAI/litellm
+  DOWNSTREAM_BRANCH: litellm_internal_staging
+
+jobs:
+  sync-upstream:
+    name: Sync Upstream Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    outputs:
+      upstream_tag: ${{ steps.release.outputs.tag }}
+      pr_required: ${{ steps.sync.outputs.pr_required }}
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Resolve upstream release
+        id: release
+        env:
+          UPSTREAM_TAG_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.upstream_tag || '' }}
+        run: |
+          if [ -n "${UPSTREAM_TAG_INPUT}" ]; then
+            tag="${UPSTREAM_TAG_INPUT}"
+          else
+            tag="$(curl -fsSL "https://api.github.com/repos/${UPSTREAM_REPOSITORY}/releases/latest" | jq -r '.tag_name')"
+          fi
+
+          if [ -z "${tag}" ] || [ "${tag}" = "null" ]; then
+            echo "::error::Unable to resolve upstream release tag"
+            exit 1
+          fi
+
+          if ! echo "${tag}" | grep -qE '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$'; then
+            echo "::error::Release tag '${tag}' is not a valid Docker tag"
+            exit 1
+          fi
+
+          curl -fsSL "https://api.github.com/repos/${UPSTREAM_REPOSITORY}/releases/tags/${tag}" >/dev/null
+
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Checkout downstream repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ env.DOWNSTREAM_BRANCH }}
+          fetch-depth: 0
+          persist-credentials: true
+          token: ${{ secrets.SYNC_WORKFLOW_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Merge upstream release into downstream branch
+        id: sync
+        env:
+          SYNC_TOKEN: ${{ secrets.SYNC_WORKFLOW_TOKEN || secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${SYNC_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          git remote add upstream "https://github.com/${UPSTREAM_REPOSITORY}.git"
+          git fetch --no-tags upstream "refs/tags/${TAG}:refs/tags/${TAG}"
+          git fetch origin "refs/heads/${DOWNSTREAM_BRANCH}:refs/remotes/origin/${DOWNSTREAM_BRANCH}"
+          git checkout -B "${DOWNSTREAM_BRANCH}" "origin/${DOWNSTREAM_BRANCH}"
+
+          upstream_commit="$(git rev-list -n 1 "refs/tags/${TAG}")"
+          synced_commit="$(git log --fixed-strings --grep="Upstream commit: ${upstream_commit}" -n 1 --format=%H)"
+          sync_branch="upstream-release/${TAG}"
+
+          commit_sync() {
+            git commit --allow-empty \
+              -m "Sync upstream LiteLLM ${TAG}" \
+              -m "Upstream commit: ${upstream_commit}" \
+              -m "The .github/workflows directory is intentionally kept from ${DOWNSTREAM_BRANCH}."
+          }
+
+          write_pr_outputs() {
+            reason="$1"
+            conflicts="${2:-}"
+            {
+              echo "pr_required=true"
+              echo "pr_branch=${sync_branch}"
+              echo "pr_reason=${reason}"
+              echo "conflict_files<<EOF"
+              echo "${conflicts}"
+              echo "EOF"
+            } >> "${GITHUB_OUTPUT}"
+          }
+
+          push_pr_branch() {
+            git checkout -B "${sync_branch}"
+            git push origin "HEAD:refs/heads/${sync_branch}" --force
+          }
+
+          if git merge-base --is-ancestor "${upstream_commit}" HEAD || [ -n "${synced_commit}" ]; then
+            echo "Downstream ${DOWNSTREAM_BRANCH} already contains upstream release ${TAG}."
+          else
+            if ! git merge --squash --no-commit "refs/tags/${TAG}"; then
+              conflict_files="$(git diff --name-only --diff-filter=U | sed 's/^/- /')"
+              git reset --hard
+              git checkout -B "${sync_branch}" "${upstream_commit}"
+              git restore --source="origin/${DOWNSTREAM_BRANCH}" --staged --worktree -- .github/workflows || true
+              git commit --allow-empty \
+                -m "Keep downstream GitHub workflows for ${TAG}" \
+                -m "Upstream commit: ${upstream_commit}" \
+                -m "Non-workflow merge conflicts must be resolved in the pull request."
+              git push origin "HEAD:refs/heads/${sync_branch}" --force
+              write_pr_outputs "Automatic merge of upstream release ${TAG} into ${DOWNSTREAM_BRANCH} had conflicts outside .github/workflows. Resolve these files in the PR before merging." "${conflict_files}"
+              exit 0
+            else
+              git restore --source=HEAD --staged --worktree -- .github/workflows || true
+              commit_sync
+
+              if ! git push origin "HEAD:refs/heads/${DOWNSTREAM_BRANCH}"; then
+                push_pr_branch
+                write_pr_outputs "Automatic merge of upstream release ${TAG} succeeded, but pushing directly to ${DOWNSTREAM_BRANCH} failed."
+                exit 0
+              fi
+            fi
+          fi
+
+          echo "pr_required=false" >> "${GITHUB_OUTPUT}"
+          echo "branch=${DOWNSTREAM_BRANCH}" >> "${GITHUB_OUTPUT}"
+          echo "commit=${upstream_commit}" >> "${GITHUB_OUTPUT}"
+
+
+      - name: Open sync pull request
+        if: steps.sync.outputs.pr_required == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_WORKFLOW_TOKEN || github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          PR_BRANCH: ${{ steps.sync.outputs.pr_branch }}
+          PR_REASON: ${{ steps.sync.outputs.pr_reason }}
+          CONFLICT_FILES: ${{ steps.sync.outputs.conflict_files }}
+        run: |
+          pr_head="${PR_BRANCH}"
+
+          existing_pr="$(
+            gh pr list \
+              --repo "${GITHUB_REPOSITORY}" \
+              --head "${pr_head}" \
+              --base "${DOWNSTREAM_BRANCH}" \
+              --json number \
+              --jq '.[0].number // empty'
+          )"
+
+          if [ -n "${existing_pr}" ]; then
+            echo "Sync pull request already exists for ${pr_head}."
+            exit 0
+          fi
+
+          body="$(cat <<EOF
+          ${PR_REASON}
+
+          Resolve or review this PR, merge it into ${DOWNSTREAM_BRANCH}, then rerun the workflow to build and push the Docker image.
+          EOF
+          )"
+          if [ -n "${CONFLICT_FILES}" ]; then
+            body="$(cat <<EOF
+          ${PR_REASON}
+
+          Conflicted files:
+          ${CONFLICT_FILES}
+
+          Resolve this PR manually, merge it into ${DOWNSTREAM_BRANCH}, then rerun the workflow to build and push the Docker image.
+          EOF
+          )"
+          fi
+
+          gh pr create \
+            --repo "${GITHUB_REPOSITORY}" \
+            --base "${DOWNSTREAM_BRANCH}" \
+            --head "${pr_head}" \
+            --title "Sync upstream LiteLLM ${TAG}" \
+            --body "${body}"
+
+  build-image:
+    name: Build Docker Image
+    needs: sync-upstream
+    if: needs.sync-upstream.outputs.pr_required != 'true'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/build-litellm-docker-image.yml
+    with:
+      upstream_tag: ${{ needs.sync-upstream.outputs.upstream_tag }}
+      ref: litellm_internal_staging
+      force_rebuild: ${{ github.event_name == 'workflow_dispatch' && inputs.force_rebuild || false }}
+    secrets: inherit
