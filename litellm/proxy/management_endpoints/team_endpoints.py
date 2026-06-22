@@ -863,8 +863,9 @@ async def new_team(  # noqa: PLR0915
     - members_with_roles: List[{"role": "admin" or "user", "user_id": "<user-id>"}] - A list of users and their roles in the team. Get user_id when making a new user via `/user/new`.
     - team_member_permissions: Optional[List[str]] - A list of routes that non-admin team members can access. example: ["/key/generate", "/key/update", "/key/delete"]
     - metadata: Optional[dict] - Metadata for team, store information for team. Example metadata = {"extra_info": "some info"}
-    - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit for this team - applied across all keys for this team. 
+    - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit for this team - applied across all keys for this team.
     - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit for this team - applied across all keys for this team.
+    - mcp_rpm_limit: Optional[Dict[str, int]] - Per-MCP-server RPM limit for this team, keyed by MCP server name (alias if set, else the configured name). Example: {"github": 100, "slack": 200}. Applied across all keys for this team.
     - tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for this team - all keys with this team_id will have at max this TPM limit
     - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
     - rpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of RPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating RPM, or "best_effort_throughput" for best effort enforcement.
@@ -4683,15 +4684,36 @@ async def team_model_add(
             detail={"error": "Only proxy admin or team admin can modify team models"},
         )
 
-    updated_models = add_new_models_to_team(team_obj=team_obj, new_models=data.models)
-    # Update team. `include` mirrors the relations the auth path consumes
-    # off the cached team object so that `_refresh_cached_team` doesn't
-    # null them out — see object_permission_utils.validate_key_search_tools_against_team
-    # and the MCP/agent authz paths, which treat a missing object_permission
-    # as "no team-level restriction".
+    # Atomic array append with dedup at the database level so concurrent
+    # BYOK model creates don't overwrite each other's team.models entries.
+    # When the team currently has models=[] (unrestricted access), the
+    # CASE expression inserts the 'all-proxy-models' sentinel first.
+    models_to_add = list(data.models)
+    await prisma_client.db.execute_raw(
+        'UPDATE "LiteLLM_TeamTable" '
+        "SET models = ("
+        "  SELECT ARRAY(SELECT DISTINCT unnest("
+        "    CASE WHEN cardinality(COALESCE(models, ARRAY[]::text[])) = 0 "
+        "         THEN ARRAY['all-proxy-models']::text[] "
+        "         ELSE models "
+        "    END || $1::text[]"
+        "  ))"
+        ") "
+        "WHERE team_id = $2",
+        models_to_add,
+        data.team_id,
+    )
+    # Re-fetch via update (write-routed) instead of find_unique (read-routed)
+    # to avoid returning stale data from a read replica. The models column was
+    # already set by execute_raw above; this bumps updated_at. `include` mirrors
+    # the relations the auth path consumes off the cached team object so that
+    # `_refresh_cached_team` doesn't null them out — see
+    # object_permission_utils.validate_key_search_tools_against_team and the
+    # MCP/agent authz paths, which treat a missing object_permission as
+    # "no team-level restriction".
     updated_team = await prisma_client.db.litellm_teamtable.update(
         where={"team_id": data.team_id},
-        data={"models": updated_models},
+        data={"updated_at": datetime.now(timezone.utc)},
         include={"object_permission": True},  # type: ignore
     )
 

@@ -3810,14 +3810,15 @@ async def test_model_info_v1_oci_secrets_not_leaked():
 
     # Mock the llm_router to return our test data
     mock_router = MagicMock()
+    mock_router.model_list = [mock_model_data]
     mock_router.get_model_names.return_value = ["oci-grok-test"]
     mock_router.get_model_access_groups.return_value = {}
-    mock_router.get_model_list.return_value = [mock_model_data]
 
     # Mock global variables
     with (
         patch("litellm.proxy.proxy_server.llm_router", mock_router),
         patch("litellm.proxy.proxy_server.llm_model_list", [mock_model_data]),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
         patch(
             "litellm.proxy.proxy_server.general_settings",
             {"infer_model_from_keys": False},
@@ -5163,6 +5164,110 @@ async def test_async_data_generator_passes_through_google_native_sse_bytes():
     assert yielded_text[2] == f'data: {raw_payload.decode("utf-8")}\n\n'
     assert "b'data:" not in "".join(yielded_text)
     assert yielded_text[-1] == "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_google_genai_stream_omits_openai_done():
+    """
+    google-genai SDK streamGenerateContent?alt=sse must not receive data: [DONE].
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_request_data = {
+        "model": "gemini-2.0-flash",
+        "_litellm_skip_openai_stream_done": True,
+    }
+    gemini_event = (
+        b'data: {"candidates": [{"content": {"parts": [{"text": "Hi"}]}}]}\n\n'
+    )
+
+    class MockStream:
+        def __aiter__(self):
+            return self._stream()
+
+        async def _stream(self):
+            yield gemini_event
+
+        async def aclose(self):
+            pass
+
+    mock_response = MockStream()
+    mock_response.aclose = AsyncMock()
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging_obj.has_streaming_callbacks.return_value = False
+    mock_proxy_logging_obj.needs_iterator_wrap.return_value = False
+    mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
+    mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
+        with patch.object(ProxyLogging, "_fire_deferred_stream_logging"):
+            yielded_data = []
+            async for data in async_data_generator(
+                mock_response, mock_user_api_key_dict, mock_request_data
+            ):
+                yielded_data.append(data)
+
+    yielded_text = [
+        chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+        for chunk in yielded_data
+    ]
+    assert yielded_text == [gemini_event.decode("utf-8")]
+    assert "[DONE]" not in "".join(yielded_text)
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_google_genai_stream_forwards_error_without_done():
+    """Stream errors must still reach the client when OpenAI [DONE] is skipped."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    error_sse = 'data: {"error": {"message": "stream failed"}}\n\n'
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_request_data = {
+        "model": "gemini-2.0-flash",
+        "_litellm_skip_openai_stream_done": True,
+    }
+
+    class MockStream:
+        def __aiter__(self):
+            return self._stream()
+
+        async def _stream(self):
+            yield error_sse
+
+        async def aclose(self):
+            pass
+
+    mock_response = MockStream()
+    mock_response.aclose = AsyncMock()
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging_obj.has_streaming_callbacks.return_value = False
+    mock_proxy_logging_obj.needs_iterator_wrap.return_value = False
+    mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
+    mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
+        with patch.object(ProxyLogging, "_fire_deferred_stream_logging"):
+            yielded_data = []
+            async for data in async_data_generator(
+                mock_response, mock_user_api_key_dict, mock_request_data
+            ):
+                yielded_data.append(data)
+
+    yielded_text = [
+        chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+        for chunk in yielded_data
+    ]
+    assert yielded_text == [error_sse]
+    assert "[DONE]" not in "".join(yielded_text)
 
 
 @pytest.mark.asyncio

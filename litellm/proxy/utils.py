@@ -89,10 +89,13 @@ from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
-from litellm.exceptions import RejectedRequestError
+from litellm.exceptions import RejectedRequestError, SensitiveDataRouteException
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
+)
+from litellm.proxy.hooks.sensitive_data_routing import (
+    _PROXY_SensitiveDataRoutingHandler,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
@@ -643,6 +646,7 @@ class ProxyLogging:
             "user_api_key_request_route": kwargs.get("user_api_key_request_route"),
             "mcp_tool_name": request_obj.tool_name,  # Keep original for reference
             "mcp_arguments": request_obj.arguments,  # Keep original for reference
+            "mcp_server_name": kwargs.get("mcp_rate_limit_server_name"),
             # Raw Bearer token from the original HTTP request — allows guardrails
             # (e.g. MCPJWTSigner) to independently verify the caller's identity
             # before re-signing an outbound token (FR-5 verify+re-sign).
@@ -1150,6 +1154,9 @@ class ProxyLogging:
                     response=response, data=data, call_type=call_type
                 )
 
+        except SensitiveDataRouteException:
+            status = "intervened"
+            raise
         except Exception as e:
             status = "error"
             error_type = type(e).__name__
@@ -1459,47 +1466,57 @@ class ProxyLogging:
                     self._process_guardrail_metadata(data)
                 return data
 
+            deferred_route_exc: Optional[SensitiveDataRouteException] = None
             for _callback in caps.resolved_callbacks:
                 start_time = time.time()
-                if isinstance(_callback, CustomGuardrail) and data is not None:
-                    # Skip guardrails managed by a pipeline
-                    if (
-                        _callback.guardrail_name
-                        and _callback.guardrail_name in pipeline_managed
-                    ):
-                        continue
+                try:
+                    if isinstance(_callback, CustomGuardrail) and data is not None:
+                        # Skip guardrails managed by a pipeline
+                        if (
+                            _callback.guardrail_name
+                            and _callback.guardrail_name in pipeline_managed
+                        ):
+                            continue
 
-                    result = await self._process_guardrail_callback(
-                        callback=_callback,
-                        data=data,  # type: ignore
-                        user_api_key_dict=user_api_key_dict,
-                        call_type=call_type,
-                        event_type=GuardrailEventHooks.pre_call,
-                    )
-                    if result is None:
-                        continue
-                    data = result
-
-                elif (
-                    _callback is not None
-                    and isinstance(_callback, CustomLogger)
-                    and "async_pre_call_hook" in vars(_callback.__class__)
-                    and _callback.__class__.async_pre_call_hook
-                    != CustomLogger.async_pre_call_hook
-                ):
-                    if call_type == "call_mcp_tool" and user_api_key_dict is None:
-                        continue
-
-                    response = await _callback.async_pre_call_hook(
-                        user_api_key_dict=user_api_key_dict,
-                        cache=self.call_details["user_api_key_cache"],
-                        data=data,  # type: ignore
-                        call_type=call_type,  # type: ignore
-                    )
-                    if response is not None:
-                        data = await self.process_pre_call_hook_response(
-                            response=response, data=data, call_type=call_type
+                        result = await self._process_guardrail_callback(
+                            callback=_callback,
+                            data=data,  # type: ignore
+                            user_api_key_dict=user_api_key_dict,
+                            call_type=call_type,
+                            event_type=GuardrailEventHooks.pre_call,
                         )
+                        if result is None:
+                            continue
+                        data = result
+
+                    elif (
+                        _callback is not None
+                        and isinstance(_callback, CustomLogger)
+                        and "async_pre_call_hook" in vars(_callback.__class__)
+                        and _callback.__class__.async_pre_call_hook
+                        != CustomLogger.async_pre_call_hook
+                    ):
+                        if call_type == "call_mcp_tool" and user_api_key_dict is None:
+                            continue
+
+                        response = await _callback.async_pre_call_hook(
+                            user_api_key_dict=user_api_key_dict,
+                            cache=self.call_details["user_api_key_cache"],
+                            data=data,  # type: ignore
+                            call_type=call_type,  # type: ignore
+                        )
+                        if response is not None:
+                            data = await self.process_pre_call_hook_response(
+                                response=response, data=data, call_type=call_type
+                            )
+                except SensitiveDataRouteException as e:
+                    # Defer the reroute until remaining guardrails have run so later
+                    # security checks are not skipped; the first reroute wins and a
+                    # later guardrail that blocks still propagates. Fall through to the
+                    # service-span recording below so the triggering guardrail is still
+                    # timed like every other callback.
+                    if deferred_route_exc is None:
+                        deferred_route_exc = e
 
                 end_time = time.time()
                 duration = end_time - start_time
@@ -1515,12 +1532,75 @@ class ProxyLogging:
                         end_time=end_time,
                     )
 
+            if deferred_route_exc is not None and data is not None:
+                data = await self._handle_sensitive_data_route_exception(
+                    deferred_route_exc, data, user_api_key_dict
+                )
+
             if data is not None:
                 self._process_guardrail_metadata(data)
 
             return data
+        except SensitiveDataRouteException as e:
+            data = await self._handle_sensitive_data_route_exception(
+                e, data, user_api_key_dict
+            )
+            if data is not None:
+                self._process_guardrail_metadata(data)
+            return data
         except Exception as e:
             raise e
+
+    async def _handle_sensitive_data_route_exception(
+        self,
+        exc: SensitiveDataRouteException,
+        data: Optional[dict],
+        user_api_key_dict: Optional[UserAPIKeyAuth],
+    ) -> Optional[dict]:
+        """
+        Handle SensitiveDataRouteException by rerouting the current request to
+        the target model and, when sticky_session_routing is enabled, persisting
+        the session override so subsequent requests reuse the same model.
+        """
+        if data is None:
+            return None
+
+        verbose_proxy_logger.info(
+            "SensitiveDataRouteException caught: session_id=%s route_to_model=%s guardrail=%s sticky=%s",
+            exc.session_id,
+            exc.route_to_model,
+            exc.guardrail_name,
+            exc.sticky_session_routing,
+        )
+
+        if exc.sticky_session_routing:
+            sensitive_routing_hook = self.get_proxy_hook("sensitive_data_routing")
+            if isinstance(sensitive_routing_hook, _PROXY_SensitiveDataRoutingHandler):
+                await sensitive_routing_hook.set_session_routing(
+                    session_id=exc.session_id,
+                    model=exc.route_to_model,
+                    user_api_key_dict=user_api_key_dict,
+                    guardrail_name=exc.guardrail_name,
+                )
+            else:
+                verbose_proxy_logger.warning(
+                    "SensitiveDataRouteException requested sticky routing for session_id=%s "
+                    "but the 'sensitive_data_routing' hook is not registered. Only this request "
+                    "will be rerouted; subsequent requests will not be sticky.",
+                    exc.session_id,
+                )
+
+        original_model = data.get("model")
+        data["model"] = exc.route_to_model
+
+        metadata = data.get("metadata") or {}
+        metadata["sensitive_data_routing_applied"] = True
+        metadata["sensitive_data_routing_original_model"] = original_model
+        metadata["sensitive_data_routing_guardrail"] = exc.guardrail_name
+        metadata["sensitive_data_routing_detection_info"] = exc.detection_info
+        data["metadata"] = metadata
+
+        return data
 
     @staticmethod
     async def _run_guardrail_task_with_enrichment(
@@ -3159,40 +3239,49 @@ class PrismaClient:
         self, sql_query: str, *args
     ) -> Optional[dict]:
         """
-        Execute a query with automatic fallback for PostgreSQL cached plan errors.
+        Execute a query, recovering once from PostgreSQL's "cached plan must not
+        change result type" error.
 
-        This handles the "cached plan must not change result type" error that occurs
-        during rolling deployments when schema changes are applied while old pods
-        still have cached query plans expecting the old schema.
+        That error surfaces during rolling deployments when a schema change
+        invalidates the prepared-statement plans that pooled connections still
+        hold. Clearing only the server-side plans with DEALLOCATE ALL makes
+        things worse: Prisma's query engine keeps a per-connection client-side
+        cache of prepared-statement names, so once the server drops a plan the
+        engine re-sends a name PostgreSQL no longer recognizes and the
+        connection breaks with `prepared statement "sN" does not exist`. With a
+        small pool that connection stays poisoned and every auth lookup fails.
 
-        Args:
-            sql_query: SQL query string to execute
+        Recreating the Prisma client kills the engine subprocess and drops the
+        server-side plans and the engine's client-side name cache together, so
+        the retried query is prepared fresh. We reconnect through
+        `attempt_db_reconnect`, which is singleflight: when a schema change
+        poisons every pooled connection at once, the first cached-plan error
+        recreates the client and the concurrent waiters reuse that single
+        recreate instead of racing to kill each other's fresh engine. We then
+        retry the identical query exactly once.
 
-        Returns:
-            Query result or None
+        The retry reuses the original query byte-for-byte. Mutating the SQL
+        (e.g. injecting a unique comment) would defeat PostgreSQL's plan cache,
+        forcing a fresh plan on every request and pegging the database CPU.
 
-        Raises:
-            Original exception if not a cached plan error
+        If the reconnect is skipped because a recent reconnect is still within
+        its cooldown, the retry runs against the same connection and may fail
+        again; the get_data backoff decorator re-runs the lookup and a later
+        attempt reconnects once the cooldown elapses.
         """
         try:
             return await self.db.query_first(sql_query, *args)
         except Exception as e:
-            error_str = str(e)
-            if "cached plan must not change result type" in error_str:
-                # Force PostgreSQL to re-plan by invalidating the cache
-                # Add a unique comment to make the query different
-                sql_query_retry = sql_query.replace(
-                    "SELECT",
-                    f"SELECT /* cache_invalidated_{int(time.time() * 1000)} */",
-                )
-                verbose_proxy_logger.warning(
-                    "PostgreSQL cached plan error detected for token lookup, "
-                    "retrying with fresh plan. This may occur during rolling deployments "
-                    "when schema changes are applied."
-                )
-                return await self.db.query_first(sql_query_retry, *args)
-            else:
+            if "cached plan must not change result type" not in str(e):
                 raise
+            verbose_proxy_logger.warning(
+                "PostgreSQL cached plan error detected for token lookup; "
+                "recreating the database connection and retrying with the same "
+                "query. This may occur during rolling deployments when schema "
+                "changes are applied."
+            )
+            await self.attempt_db_reconnect(reason="postgres_cached_plan_error")
+            return await self.db.query_first(sql_query, *args)
 
     @backoff.on_exception(
         backoff.expo,
@@ -3548,7 +3637,10 @@ class PrismaClient:
                             db=self.db, hashed_token=hashed_token
                         )
                         if active_token_id:
-                            response = await self.get_data(
+                            # The recursive call returns a finished
+                            # LiteLLM_VerificationTokenView; the dict
+                            # normalization below would crash subscripting it.
+                            deprecated_response = await self.get_data(
                                 token=active_token_id,
                                 table_name="combined_view",
                                 query_type="find_unique",
@@ -3556,10 +3648,11 @@ class PrismaClient:
                                 proxy_logging_obj=proxy_logging_obj,
                                 check_deprecated=False,
                             )
-                            if response is not None:
+                            if deprecated_response is not None:
                                 verbose_proxy_logger.debug(
                                     "Deprecated key used during grace period"
                                 )
+                            return deprecated_response
 
                     if response is not None:
                         if response["team_models"] is None:
