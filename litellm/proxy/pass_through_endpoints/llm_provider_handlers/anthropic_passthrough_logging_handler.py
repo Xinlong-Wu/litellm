@@ -6,7 +6,6 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -16,7 +15,6 @@ from litellm.llms.anthropic import get_anthropic_config
 from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
 )
-from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -25,7 +23,6 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 from litellm.types.utils import (
     Choices,
     LiteLLMBatch,
-    Message,
     ModelResponse,
     TextCompletionResponse,
 )
@@ -696,7 +693,7 @@ class AnthropicPassthroughLoggingHandler:
 
         from litellm._uuid import uuid
         from litellm.llms.anthropic.batches.transformation import AnthropicBatchesConfig
-        from litellm.types.utils import Choices, SpecialEnums
+        from litellm.types.utils import SpecialEnums
 
         try:
             _json_response = httpx_response.json()

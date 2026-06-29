@@ -40,7 +40,7 @@ class _ProxyDBLogger(CustomLogger):
             kwargs, response_obj, start_time, end_time
         )
 
-    async def async_post_call_failure_hook(  # noqa: PLR0915
+    async def async_post_call_failure_hook(
         self,
         request_data: dict,
         original_exception: Exception,
