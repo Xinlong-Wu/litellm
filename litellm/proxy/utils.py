@@ -6454,6 +6454,8 @@ def create_model_info_response(
         "created": DEFAULT_MODEL_CREATED_AT_TIME,
         "owned_by": provider,
     }
+    if not include_metadata:
+        return base
 
     # Surface context-window limits for OpenAI-compatible discovery clients.
     # Only emitted when known, so wildcard routes and limitless backends stay clean.

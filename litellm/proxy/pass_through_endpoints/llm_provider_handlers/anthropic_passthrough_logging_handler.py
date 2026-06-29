@@ -6,6 +6,7 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -15,12 +16,19 @@ from litellm.llms.anthropic import get_anthropic_config
 from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
 )
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
-from litellm.types.utils import LiteLLMBatch, ModelResponse, TextCompletionResponse
+from litellm.types.utils import (
+    Choices,
+    LiteLLMBatch,
+    Message,
+    ModelResponse,
+    TextCompletionResponse,
+)
 
 if TYPE_CHECKING:
     from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
@@ -272,6 +280,9 @@ class AnthropicPassthroughLoggingHandler:
 
             kwargs["response_cost"] = response_cost
             kwargs["model"] = model
+            # the pass-through success path reads spend from
+            # model_call_details["response_cost"], not from kwargs
+            logging_obj.model_call_details["response_cost"] = response_cost
             passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (  # type: ignore
                 kwargs.get("passthrough_logging_payload")
             )
@@ -349,7 +360,45 @@ class AnthropicPassthroughLoggingHandler:
                 litellm_logging_obj=litellm_logging_obj,
                 model=model,
             )
-        )
+            if chunk_model:
+                model = chunk_model
+
+        try:
+            complete_streaming_response = (
+                AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+                    all_chunks=all_chunks,
+                    litellm_logging_obj=litellm_logging_obj,
+                    model=model,
+                )
+            )
+        except Exception as e:
+            # stream_chunk_builder re-raises assembly failures (as litellm.APIError)
+            # on large agentic tool-use / thinking streams; treat that the same as a
+            # None result so the usage-only fallback below still recovers cost
+            verbose_proxy_logger.warning(
+                "Anthropic passthrough: stream assembly raised (model=%s): %s; falling "
+                "back to usage-only cost from raw SSE events.",
+                model,
+                e,
+            )
+            complete_streaming_response = None
+        if complete_streaming_response is None:
+            # stream_chunk_builder cannot always reassemble large agentic streams, but
+            # Anthropic still emits token usage in the message_start / message_delta SSE
+            # events regardless of content shape; recover usage-only so cost is tracked.
+            # Guard it too: a raise here would defeat the point and drop the request
+            try:
+                complete_streaming_response = AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+                    all_chunks=all_chunks,
+                    model=model,
+                )
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    "Anthropic passthrough: usage-only fallback failed (model=%s): %s",
+                    model,
+                    e,
+                )
+                complete_streaming_response = None
         if complete_streaming_response is None:
             verbose_proxy_logger.error(
                 "Unable to build complete streaming response for Anthropic passthrough endpoint, not logging..."

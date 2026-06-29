@@ -59,6 +59,23 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.BEDROCK_MANTLE
 
+    @staticmethod
+    def _resolve_region(params: dict) -> str:
+        region = params.get("aws_region_name")
+        if region:
+            return region
+        base = params.get("api_base") or get_secret_str("BEDROCK_MANTLE_API_BASE")
+        if base:
+            match = _MANTLE_HOST_RE.match(base.rstrip("/"))
+            if match:
+                return match.group(1)
+        return (
+            get_secret_str("BEDROCK_MANTLE_REGION")
+            or get_secret_str("AWS_REGION_NAME")
+            or get_secret_str("AWS_REGION")
+            or BEDROCK_MANTLE_DEFAULT_REGION
+        )
+
     def get_complete_url(
         self,
         api_base: Optional[str],

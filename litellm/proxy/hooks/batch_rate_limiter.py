@@ -32,13 +32,15 @@ from typing import (
 from fastapi import HTTPException
 from pydantic import BaseModel
 
+import json
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.batch_utils import (
+    _count_entry_tokens,
+    _estimate_batch_entry_tokens,
     _extract_file_access_credentials,
-    _get_batch_job_input_file_usage,
-    _get_file_content_as_dictionary,
-    _get_models_from_batch_input_file_content,
+    _iter_batch_input_lines,
 )
 from litellm.exceptions import RateLimitErrorCategory
 from litellm.integrations.custom_logger import CustomLogger
@@ -568,7 +570,38 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     f"Expected bytes content from file retrieval for {file_id}, "
                     f"got {type(file_content_bytes)}"
                 )
-            file_content_as_dict = _get_file_content_as_dictionary(file_content_bytes)
+
+            # Single streaming pass over the JSONL lines, accounting each row
+            # independently. One bad row can never abort the pass: a malformed
+            # line is skipped (its request can't run upstream anyway) and a row
+            # the token counter can't measure falls back to a conservative
+            # size-based estimate. This guarantees two things a restricted caller
+            # must not be able to break by crafting a row that raises:
+            #   1. The allowlist check below always sees every parseable
+            #      ``body.model`` (the loop never stops early), so models can't be
+            #      smuggled in after a bad row.
+            #   2. The token total is never silently zeroed, so the TPM limit
+            #      can't be evaded by sending uncountable rows.
+            # Counting stays best-effort, so a legitimate (e.g. multimodal) row
+            # the counter can't measure is estimated, not hard-rejected.
+            models: set = set()
+            total_tokens = 0
+            request_count = 0
+            for raw_line in _iter_batch_input_lines(file_content_bytes):
+                request_count += 1
+                try:
+                    entry = json.loads(raw_line)
+                except Exception:
+                    total_tokens += _estimate_batch_entry_tokens(raw_line)
+                    continue
+                if isinstance(entry, dict):
+                    model = (entry.get("body") or {}).get("model")
+                    if model:
+                        models.add(model)
+                try:
+                    total_tokens += _count_entry_tokens(entry)
+                except Exception:
+                    total_tokens += _estimate_batch_entry_tokens(raw_line)
 
             # Validate every model named in the batch JSONL against the
             # caller's per-key model allowlist. Without this, a caller
@@ -582,13 +615,8 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     target_model_names=target_model_names or None,
                 )
 
-            input_file_usage = _get_batch_job_input_file_usage(
-                file_content_dictionary=file_content_as_dict,
-                custom_llm_provider=custom_llm_provider,
-            )
-            request_count = len(file_content_as_dict)
             return BatchFileUsage(
-                total_tokens=input_file_usage.total_tokens,
+                total_tokens=total_tokens,
                 request_count=request_count,
             )
 
