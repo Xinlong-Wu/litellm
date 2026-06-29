@@ -322,7 +322,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             event_type = "output"
             hook_name = "apply_guardrail (response)"
 
-        ai_guard_payload = {
+        ai_guard_payload: dict[str, Any] = {
             "guard_input": guard_input.model_dump(mode="json"),
             "event_type": event_type,
         }

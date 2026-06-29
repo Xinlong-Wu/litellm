@@ -987,6 +987,74 @@ class TestAnthropicBatchPassthroughCostTracking:
             )
 
 
+class TestBuildCompleteStreamingResponseRobustness:
+    """_build_complete_streaming_response must tolerate non-standard SSE frames."""
+
+    def _build(self, chunks: List[str]):
+        return AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+            all_chunks=chunks,
+            litellm_logging_obj=MagicMock(),
+            model="claude-3-sonnet-20240229",
+        )
+
+    def test_done_frame_is_skipped(self):
+        """A bare 'data: [DONE]' control frame must not break reconstruction."""
+        chunks = [
+            'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-3-sonnet-20240229","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}',
+            'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}',
+            'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+            'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}',
+            'event: message_stop\ndata: {"type":"message_stop"}',
+            "data: [DONE]",
+        ]
+        result = self._build(chunks)
+        assert result is not None
+        assert result.choices[0].message.content == "Hi"
+
+    def test_non_json_sse_line_is_skipped(self):
+        """Non-JSON SSE lines (comments, keep-alive pings) must be skipped."""
+        chunks = [
+            ": ping",
+            'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-3-sonnet-20240229","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}',
+            "this is not json at all",
+        ]
+        # Must not raise; a malformed stream simply yields no usable response.
+        result = self._build(chunks)
+        assert result is None or hasattr(result, "choices")
+
+    def test_mixed_valid_and_invalid_frames(self):
+        """Valid events are still collected when interleaved with invalid ones."""
+        chunks = [
+            'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-3-sonnet-20240229","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}',
+            "data: [DONE]",
+            ": keep-alive",
+            "not-json",
+            'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}',
+            'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+            'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}',
+            'event: message_stop\ndata: {"type":"message_stop"}',
+        ]
+        result = self._build(chunks)
+        assert result is not None
+        assert result.choices[0].message.content == "Hello"
+
+    def test_done_in_text_payload_is_not_dropped(self):
+        """A valid event whose text content contains '[DONE]' must NOT be skipped."""
+        chunks = [
+            'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-3-sonnet-20240229","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}',
+            'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"The stream ends with [DONE]"}}',
+            'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+            'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":8}}',
+            'event: message_stop\ndata: {"type":"message_stop"}',
+        ]
+        result = self._build(chunks)
+        assert result is not None
+        assert result.choices[0].message.content == "The stream ends with [DONE]"
+
+
 class TestPureTextFastPathParity:
     """
     The pure-text fast path in _build_complete_streaming_response must produce
@@ -1346,72 +1414,145 @@ class TestPureTextFastPathParity:
         )
 
 
-class TestBuildCompleteStreamingResponseRobustness:
-    """_build_complete_streaming_response must tolerate non-standard SSE frames."""
+class TestInterruptedStreamOutputTokenRecovery:
+    """
+    When an Anthropic pass-through stream is interrupted (client disconnect)
+    before the terminal ``message_delta``, the only usage signal is the
+    ``message_start`` ``output_tokens`` placeholder (typically 1-3), so
+    completion tokens and spend are undercounted ~20x. The handler must
+    re-tokenize the buffered ``content_block_delta`` text to recover a
+    realistic ``output_tokens``; completed streams must stay untouched.
+    """
 
-    def _build(self, chunks: List[str]):
-        return AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
-            all_chunks=chunks,
-            litellm_logging_obj=MagicMock(),
-            model="claude-3-sonnet-20240229",
+    @staticmethod
+    def _sse(event, data):
+        return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
+
+    _MODEL = "claude-3-5-haiku-20241022"
+    _OUTPUT_TEXT = (
+        "The history of computing spans centuries, beginning with mechanical "
+        "calculators and the abacus, advancing through Charles Babbage's "
+        "analytical engine, Ada Lovelace's first algorithm, Alan Turing's "
+        "theoretical machine, and the electronic computers of the twentieth "
+        "century that gave rise to the modern information age."
+    )
+
+    def _interrupted_chunks(self, *, placeholder_output_tokens: int = 2):
+        from litellm.proxy.pass_through_endpoints.streaming_handler import (
+            PassThroughStreamingHandler,
         )
 
-    def test_done_frame_is_skipped(self):
-        """A bare 'data: [DONE]' control frame must not break reconstruction."""
-        chunks = [
-            'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-3-sonnet-20240229","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}',
-            'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
-            'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}',
-            'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
-            'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}',
-            'event: message_stop\ndata: {"type":"message_stop"}',
-            "data: [DONE]",
+        words = self._OUTPUT_TEXT.split(" ")
+        frames = [
+            self._sse(
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_interrupted",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": self._MODEL,
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {
+                            "input_tokens": 29,
+                            "output_tokens": placeholder_output_tokens,
+                        },
+                    },
+                },
+            ),
+            self._sse(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": ""},
+                },
+            ),
         ]
-        result = self._build(chunks)
-        assert result is not None
-        assert result.choices[0].message.content == "Hi"
+        for i, word in enumerate(words):
+            text = word if i == 0 else " " + word
+            frames.append(
+                self._sse(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {"type": "text_delta", "text": text},
+                    },
+                )
+            )
+        # Client disconnects here: no content_block_stop / message_delta /
+        # message_stop are ever received.
+        return list(PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(frames))
 
-    def test_non_json_sse_line_is_skipped(self):
-        """Non-JSON SSE lines (comments, keep-alive pings) must be skipped."""
-        chunks = [
-            ": ping",
-            'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-3-sonnet-20240229","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}',
-            "this is not json at all",
-        ]
-        # Must not raise; a malformed stream simply yields no usable response.
-        result = self._build(chunks)
-        assert result is None or hasattr(result, "choices")
+    def _completed_chunks(self, *, final_output_tokens: int = 80):
+        chunks = self._interrupted_chunks()
+        chunks.append(
+            "data: "
+            + json.dumps(
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                    "usage": {"output_tokens": final_output_tokens},
+                }
+            )
+        )
+        chunks.append('data: {"type": "message_stop"}')
+        return chunks
 
-    def test_mixed_valid_and_invalid_frames(self):
-        """Valid events are still collected when interleaved with invalid ones."""
-        chunks = [
-            'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-3-sonnet-20240229","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}',
-            "data: [DONE]",
-            ": keep-alive",
-            "not-json",
-            'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
-            'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}',
-            'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
-            'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}',
-            'event: message_stop\ndata: {"type":"message_stop"}',
-        ]
-        result = self._build(chunks)
-        assert result is not None
-        assert result.choices[0].message.content == "Hello"
+    def _run(self, all_chunks):
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"model": self._MODEL, "stream": True}
+        logging_obj.litellm_call_id = "test-call-id"
+        logging_obj.litellm_params = {}
+        logging_obj.get_router_model_id.return_value = None
 
-    def test_done_in_text_payload_is_not_dropped(self):
-        """A valid event whose text content contains '[DONE]' must NOT be skipped."""
-        chunks = [
-            'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-3-sonnet-20240229","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}',
-            'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
-            'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"The stream ends with [DONE]"}}',
-            'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
-            'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":8}}',
-            'event: message_stop\ndata: {"type":"message_stop"}',
-        ]
-        result = self._build(chunks)
-        assert result is not None
-        assert result.choices[0].message.content == "The stream ends with [DONE]"
+        return AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="/anthropic/v1/messages",
+            request_body={"model": self._MODEL, "stream": True},
+            endpoint_type="messages",
+            start_time=datetime.now(),
+            all_chunks=all_chunks,
+            end_time=datetime.now(),
+        )
+
+    def test_interrupted_stream_retokenizes_buffered_output(self):
+        import litellm
+
+        placeholder = 2
+        result = self._run(
+            self._interrupted_chunks(placeholder_output_tokens=placeholder)
+        )
+        usage = result["result"].usage
+
+        expected = litellm.token_counter(
+            model=self._MODEL,
+            text=self._OUTPUT_TEXT,
+            count_response_tokens=True,
+        )
+
+        assert expected > placeholder * 5
+        assert usage.completion_tokens == expected
+        assert usage.completion_tokens > placeholder
+        assert usage.total_tokens == usage.prompt_tokens + expected
+        # Anthropic spend is priced off completion_tokens_details.text_tokens; if the
+        # placeholder leaks through here, cost stays undercounted even though
+        # completion_tokens looks right.
+        assert usage.completion_tokens_details.text_tokens == expected
+
+    def test_completed_stream_keeps_message_delta_tokens(self):
+        final = 80
+        result = self._run(self._completed_chunks(final_output_tokens=final))
+        usage = result["result"].usage
+
+        # Terminal message_delta present: recovery must not fire; the authoritative
+        # provider count is preserved verbatim.
+        assert usage.completion_tokens == final
 
 
 class TestStreamFalseDeduplication:

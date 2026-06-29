@@ -720,7 +720,7 @@ async def test_pre_call_allows_stripped_provider_model_when_key_has_proxy_alias(
     ):
         await rate_limiter._enforce_batch_file_model_access(
             user_api_key_dict=user,
-            models=_models(file_dict),
+            file_content_as_dict=file_dict,
             target_model_names=[proxy_alias],
         )
 
@@ -813,7 +813,7 @@ async def test_pre_call_uses_target_model_names_not_stripped_reverse_lookup(
     ):
         await rate_limiter._enforce_batch_file_model_access(
             user_api_key_dict=user,
-            models=_models(file_dict),
+            file_content_as_dict=file_dict,
             target_model_names=[batch_alias],
         )
 

@@ -402,6 +402,9 @@ REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD = int(
 REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT = int(
     os.getenv("REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT", 60)
 )
+REDIS_CIRCUIT_BREAKER_ENABLED = (
+    os.getenv("REDIS_CIRCUIT_BREAKER_ENABLED", "true").lower() == "true"
+)
 # Default Redis major version to assume when version cannot be determined
 # Using 7 as it's the modern version that supports LPOP with count parameter
 DEFAULT_REDIS_MAJOR_VERSION = int(os.getenv("DEFAULT_REDIS_MAJOR_VERSION", 7))
@@ -422,6 +425,7 @@ REPLICATE_POLLING_DELAY_SECONDS = float(
 DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS = int(
     os.getenv("DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS", 4096)
 )
+DEFAULT_OCI_CHAT_MAX_TOKENS = 4096
 TOGETHER_AI_4_B = int(os.getenv("TOGETHER_AI_4_B", 4))
 TOGETHER_AI_8_B = int(os.getenv("TOGETHER_AI_8_B", 8))
 TOGETHER_AI_21_B = int(os.getenv("TOGETHER_AI_21_B", 21))
@@ -505,6 +509,8 @@ LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS = float(
 DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE = os.getenv(
     "DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE", "streaming.chunk.yield"
 )
+
+LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED = 499
 
 EMAIL_BUDGET_ALERT_TTL = int(
     os.getenv("EMAIL_BUDGET_ALERT_TTL", 24 * 60 * 60)
@@ -618,6 +624,7 @@ LITELLM_CHAT_PROVIDERS = [
     "nscale",
     "nebius",
     "dashscope",
+    "modelscope",
     "moonshot",
     "publicai",
     "v0",
@@ -776,6 +783,7 @@ openai_compatible_endpoints: List = [
     "inference.api.nscale.com/v1",
     "api.studio.nebius.ai/v1",
     "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    "https://api-inference.modelscope.cn/v1",
     "https://api.moonshot.ai/v1",
     "https://api.publicai.co/v1",
     "https://api.synthetic.new/openai/v1",
@@ -793,6 +801,8 @@ openai_compatible_endpoints: List = [
     "https://ai-gateway.vercel.sh/v1",
     "https://api.inference.wandb.ai/v1",
     "https://api.clarifai.com/v2/ext/openai/v1",
+    "https://api.libertai.io/v1",
+    "https://pinstripes.io/v1",
 ]
 
 
@@ -835,10 +845,13 @@ openai_compatible_providers: List = [
     "nano-gpt",  # Nano-GPT - JSON-configured provider
     "poe",  # Poe - JSON-configured provider
     "chutes",  # Chutes - JSON-configured provider
+    "parasail",  # Parasail - JSON-configured provider
+    "libertai",  # LibertAI - JSON-configured provider
     "featherless_ai",
     "nscale",
     "nebius",
     "dashscope",
+    "modelscope",
     "moonshot",
     "v0",
     "helicone",
@@ -853,6 +866,7 @@ openai_compatible_providers: List = [
     "clarifai",
     "docker_model_runner",
     "ragflow",
+    "pinstripes",  # Pinstripes - JSON-configured provider
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -864,6 +878,7 @@ openai_text_completion_compatible_providers: List = (
         "featherless_ai",
         "nebius",
         "dashscope",
+        "modelscope",
         "moonshot",
         "publicai",
         "synthetic",
@@ -1121,6 +1136,48 @@ WANDB_MODELS: set = set(
         "deepseek-ai/DeepSeek-V3-0324",
         # microsoft
         "microsoft/Phi-4-mini-instruct",
+    ]
+)
+
+modelscope_models: set = set(
+    [
+        # Qwen series models
+        "Qwen/Qwen3-0.6B",
+        "Qwen/Qwen3-1.7B",
+        "Qwen/Qwen3-4B",
+        "Qwen/Qwen3-8B",
+        "Qwen/Qwen3-14B",
+        "Qwen/Qwen3-30B-A3B",
+        "Qwen/Qwen3-32B",
+        "Qwen/Qwen3-235B-A22B",
+        "Qwen/Qwen3-235B-A22B-Instruct-2507",
+        "Qwen/Qwen3-235B-A22B-Thinking-2507",
+        "Qwen/Qwen3-30B-A3B-Thinking-2507",
+        "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+        "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+        "Qwen/Qwen3-Next-80B-A3B-Instruct",
+        "Qwen/Qwen3-Next-80B-A3B-Thinking",
+        "Qwen/Qwen3-VL-235B-A22B-Instruct",
+        "Qwen/Qwen3-VL-8B-Instruct",
+        "Qwen/Qwen3-VL-8B-Thinking",
+        "Qwen/Qwen3.5-122B-A10B",
+        "Qwen/Qwen3.5-27B",
+        "Qwen/Qwen3.5-35B-A3B",
+        "Qwen/Qwen3.5-397B-A17B",
+        "Qwen/QwQ-32B",
+        "Qwen/QwQ-32B-Preview",
+        "Qwen/QVQ-72B-Preview",
+        "Qwen/Qwen-Image-Edit",
+        # DeepSeek series models
+        "deepseek-ai/DeepSeek-R1-0528",
+        "deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
+        "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+        "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+        "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+        "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
+        "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+        "deepseek-ai/DeepSeek-V3.2",
+        "deepseek-ai/DeepSeek-V4-Flash",
     ]
 )
 
@@ -1483,6 +1540,7 @@ DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"
 DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME = "db_daily_tag_spend_update_job"
 PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME = "prometheus_emit_budget_metrics"
 CLOUDZERO_EXPORT_USAGE_DATA_JOB_NAME = "cloudzero_export_usage_data"
+MAVVRIK_FOCUS_EXPORT_JOB_NAME = "mavvrik_focus_export_usage_data"
 CLOUDZERO_MAX_FETCHED_DATA_RECORDS = int(
     os.getenv("CLOUDZERO_MAX_FETCHED_DATA_RECORDS", 50000)
 )
@@ -1496,6 +1554,10 @@ SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES = int(
 )
 SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS = float(
     os.getenv("SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS", 0.5)
+)
+SPEND_LOG_PARTITION_INTERVAL = os.getenv("SPEND_LOG_PARTITION_INTERVAL", "day")
+SPEND_LOG_PARTITION_PRECREATE_AHEAD = int(
+    os.getenv("SPEND_LOG_PARTITION_PRECREATE_AHEAD", 7)
 )
 SPEND_LOG_QUEUE_SIZE_THRESHOLD = int(os.getenv("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100))
 SPEND_LOG_QUEUE_POLL_INTERVAL = float(os.getenv("SPEND_LOG_QUEUE_POLL_INTERVAL", 2.0))

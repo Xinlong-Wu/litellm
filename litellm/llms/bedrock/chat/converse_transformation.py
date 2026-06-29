@@ -1666,12 +1666,14 @@ class AmazonConverseConfig(BaseConfig):
                 bedrock_tool_config["toolChoice"] = tool_choice_values
 
         data: CommonRequestObject = {
-            "additionalModelRequestFields": additional_request_params,
-            "system": system_content_blocks,
             "inferenceConfig": self._transform_inference_params(
                 inference_params=inference_params
             ),
         }
+        if additional_request_params:
+            data["additionalModelRequestFields"] = additional_request_params
+        if system_content_blocks:
+            data["system"] = system_content_blocks
 
         # Handle all config blocks
         for config_name, config_class in self.get_config_blocks().items():
@@ -2187,7 +2189,7 @@ class AmazonConverseConfig(BaseConfig):
         real_tools = [t for i, t in enumerate(tools) if i not in json_tool_indices]
         return real_tools if real_tools else None
 
-    def _transform_response(  # noqa: PLR0915
+    def _transform_response(
         self,
         model: str,
         response: httpx.Response,

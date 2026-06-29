@@ -13,12 +13,15 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy.guardrails.guardrail_hooks.grayswan import GraySwanGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.grayswan import (
+    GraySwanGuardrail,
+)
 from litellm.proxy.guardrails.guardrail_hooks.grayswan import (
     initialize_guardrail as initialize_grayswan,
 )
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.table_repositories import GuardrailsRepository
 from litellm.secret_managers.main import get_secret
 from litellm.types.guardrails import (
     Guardrail,
@@ -28,6 +31,9 @@ from litellm.types.guardrails import (
     SupportedGuardrailIntegrations,
 )
 
+from .guardrail_hooks.llm_as_a_judge import (
+    initialize_guardrail as initialize_llm_as_a_judge,
+)
 from .guardrail_initializers import (
     initialize_bedrock,
     initialize_hide_secrets,
@@ -35,9 +41,6 @@ from .guardrail_initializers import (
     initialize_lakera_v2,
     initialize_presidio,
     initialize_tool_permission,
-)
-from .guardrail_hooks.llm_as_a_judge import (
-    initialize_guardrail as initialize_llm_as_a_judge,
 )
 
 guardrail_initializer_registry = {
@@ -259,7 +262,7 @@ class GuardrailRegistry:
             guardrail_info: str = safe_dumps(guardrail.get("guardrail_info", {}))
 
             # Create guardrail in DB
-            created_guardrail = await prisma_client.db.litellm_guardrailstable.create(
+            created_guardrail = await GuardrailsRepository(prisma_client).table.create(
                 data={
                     "guardrail_name": guardrail_name,
                     "litellm_params": litellm_params,
@@ -285,7 +288,7 @@ class GuardrailRegistry:
         """
         try:
             # Delete from DB
-            await prisma_client.db.litellm_guardrailstable.delete(
+            await GuardrailsRepository(prisma_client).table.delete(
                 where={"guardrail_id": guardrail_id}
             )
 
@@ -313,7 +316,7 @@ class GuardrailRegistry:
             guardrail_info: str = safe_dumps(guardrail.get("guardrail_info", {}))
 
             # Update in DB
-            updated_guardrail = await prisma_client.db.litellm_guardrailstable.update(
+            updated_guardrail = await GuardrailsRepository(prisma_client).table.update(
                 where={"guardrail_id": guardrail_id},
                 data={
                     "guardrail_name": guardrail_name,
@@ -337,11 +340,11 @@ class GuardrailRegistry:
         Only rows with status == "active" are returned (pending_review and rejected are excluded).
         """
         try:
-            guardrails_from_db = (
-                await prisma_client.db.litellm_guardrailstable.find_many(
-                    where={"status": "active"},
-                    order={"created_at": "desc"},
-                )
+            guardrails_from_db = await GuardrailsRepository(
+                prisma_client
+            ).table.find_many(
+                where={"status": "active"},
+                order={"created_at": "desc"},
             )
 
             guardrails: List[Guardrail] = []
@@ -359,7 +362,7 @@ class GuardrailRegistry:
         Get a guardrail by its ID from the database
         """
         try:
-            guardrail = await prisma_client.db.litellm_guardrailstable.find_unique(
+            guardrail = await GuardrailsRepository(prisma_client).table.find_unique(
                 where={"guardrail_id": guardrail_id}
             )
 
@@ -377,7 +380,7 @@ class GuardrailRegistry:
         Get a guardrail by its name from the database
         """
         try:
-            guardrail = await prisma_client.db.litellm_guardrailstable.find_unique(
+            guardrail = await GuardrailsRepository(prisma_client).table.find_unique(
                 where={"guardrail_name": guardrail_name}
             )
 

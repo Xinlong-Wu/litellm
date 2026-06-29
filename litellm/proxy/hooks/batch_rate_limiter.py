@@ -17,7 +17,17 @@ Quick summary:
 - async_log_success_event() fires on GET /v1/batches/{id} (batch completion)
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    NoReturn,
+    Optional,
+    Tuple,
+    Union,
+)
 
 from fastapi import HTTPException
 from pydantic import BaseModel
@@ -32,6 +42,7 @@ from litellm.batches.batch_utils import (
     _extract_file_access_credentials,
     _iter_batch_input_lines,
 )
+from litellm.exceptions import RateLimitErrorCategory
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import (
     ProxyErrorTypes,
@@ -39,10 +50,11 @@ from litellm.proxy._types import (
     SpecialModelNames,
     UserAPIKeyAuth,
 )
-from litellm.proxy.hooks.rate_limiter_utils import (
-    ProxyHTTPRateLimitError,
-    resolve_llm_provider_for_rate_limit,
+from litellm.proxy.common_utils.proxy_rate_limit_error import (
+    ProxyRateLimitError,
+    map_v3_rate_limit_type,
 )
+from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -387,8 +399,8 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         batch_usage: BatchFileUsage,
         limit_type: str,
         requested_model: Optional[str] = None,
-    ) -> None:
-        """Raise HTTPException for rate limit exceeded."""
+    ) -> NoReturn:
+        """Raise :class:`ProxyRateLimitError` (a 429) for batch rate limit exceeded."""
         from datetime import datetime
 
         # Find the descriptor for this status
@@ -434,14 +446,15 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
             requested_model
         )
-        raise ProxyHTTPRateLimitError(
-            status_code=429,
+        raise ProxyRateLimitError(
             detail=detail,
             headers={
                 "retry-after": str(window_size),
                 "rate_limit_type": limit_type,
                 "reset_at": reset_time_formatted,
             },
+            category=RateLimitErrorCategory.LITELLM_BATCH_RATE_LIMIT,
+            rate_limit_type=map_v3_rate_limit_type(limit_type),
             model=resolved_model,
             llm_provider=llm_provider,
         )
@@ -526,8 +539,6 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             # Managed files require bypassing the HTTP endpoint (which runs access-check hooks)
             # and calling the managed files hook directly with the user's credentials.
             is_managed_file = _is_base64_encoded_unified_file_id(file_id)
-            # For managed files the unified file id encodes the proxy model
-            # alias(es) the file was uploaded for; auth validates against those.
             target_model_names = (
                 get_models_from_unified_file_id(is_managed_file)
                 if is_managed_file
@@ -600,7 +611,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             if user_api_key_dict is not None:
                 await self._enforce_batch_file_model_access(
                     user_api_key_dict=user_api_key_dict,
-                    models=models,
+                    file_content_as_dict=file_content_as_dict,
                     target_model_names=target_model_names or None,
                 )
 
@@ -631,15 +642,14 @@ class _PROXY_BatchRateLimiter(CustomLogger):
     async def _enforce_batch_file_model_access(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        models: Optional[Iterable[str]] = None,
+        file_content_as_dict: List[dict],
         target_model_names: Optional[List[str]] = None,
     ) -> None:
         """Reject the batch if the caller is not authorized for the upload target.
 
         For managed files, ``target_model_names`` (from the unified file id) is
-        the proxy alias the file was uploaded for and is checked directly.
-        Otherwise the ``body.model`` values collected from the JSONL (``models``)
-        are checked.
+        the proxy alias the file was uploaded for and is used directly for auth.
+        For legacy/non-managed files, falls back to ``body.model`` values in the JSONL.
 
         Reuses standard auth helpers so the same model access rules the proxy
         enforces on `/chat/completions` apply here.
@@ -658,9 +668,10 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         if target_model_names:
             models = target_model_names
-
-        if not models:
-            return
+        else:
+            models = _get_models_from_batch_input_file_content(file_content_as_dict)
+            if not models:
+                return
 
         team_object = None
         if (

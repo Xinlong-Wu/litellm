@@ -605,7 +605,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
         return _tool_choice
 
-    def _map_tool_helper(  # noqa: PLR0915
+    def _map_tool_helper(
         self,
         tool: ChatCompletionToolParam,
     ) -> Tuple[Optional[AllAnthropicToolsValues], Optional[AnthropicMcpServerTool]]:
@@ -1399,7 +1399,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         return None
 
-    def map_openai_params(  # noqa: PLR0915
+    def map_openai_params(
         self,
         non_default_params: dict,
         optional_params: dict,
@@ -1612,6 +1612,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         return _tool
 
+    def should_strip_billing_metadata(self) -> bool:
+        """
+        Whether to drop x-anthropic-billing-header system blocks before sending upstream.
+
+        The first-party Anthropic API uses these blocks for Claude Code attribution, so the
+        base config keeps them. Providers that reject them (e.g. Bedrock) override this to True.
+        """
+        return False
+
     def translate_system_message(
         self, messages: List[AllMessageValues]
     ) -> List[AnthropicSystemMessageContent]:
@@ -1619,7 +1628,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         Translate system message to anthropic format.
 
         Removes system message from the original list and returns a new list of anthropic system message content.
-        Filters out system messages containing x-anthropic-billing-header metadata.
+        When should_strip_billing_metadata() is True, x-anthropic-billing-header system blocks are dropped.
         """
         system_prompt_indices = []
         anthropic_system_message_list: List[AnthropicSystemMessageContent] = []
@@ -1631,10 +1640,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     # Skip empty text blocks - Anthropic API raises errors for empty text
                     if not system_message_block["content"]:
                         continue
-                    # Skip system messages containing x-anthropic-billing-header metadata
-                    if system_message_block["content"].startswith(
-                        "x-anthropic-billing-header:"
-                    ):
+                    if self.should_strip_billing_metadata() and system_message_block[
+                        "content"
+                    ].startswith("x-anthropic-billing-header:"):
                         continue
                     anthropic_system_message_content = AnthropicSystemMessageContent(
                         type="text",
@@ -1653,9 +1661,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         text_value = _content.get("text")
                         if _content.get("type") == "text" and not text_value:
                             continue
-                        # Skip system messages containing x-anthropic-billing-header metadata
                         if (
-                            _content.get("type") == "text"
+                            self.should_strip_billing_metadata()
+                            and _content.get("type") == "text"
                             and text_value
                             and text_value.startswith("x-anthropic-billing-header:")
                         ):
@@ -2207,21 +2215,36 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             inference_geo = _usage["inference_geo"]
         service_tier = cast(
             str | None,
-            _usage.get("service_tier"),  # any-ok: untyped usage dict
+            _usage.get("service_tier"),
         )
 
-        if (
-            "cache_creation_input_tokens" in _usage
-            and _usage["cache_creation_input_tokens"] is not None
-        ):
-            cache_creation_input_tokens = _usage["cache_creation_input_tokens"]
-            prompt_tokens += cache_creation_input_tokens
-        if (
-            "cache_read_input_tokens" in _usage
-            and _usage["cache_read_input_tokens"] is not None
-        ):
-            cache_read_input_tokens = _usage["cache_read_input_tokens"]
-            prompt_tokens += cache_read_input_tokens
+        iterations: Optional[List[Any]] = _usage.get("iterations")
+        if iterations:
+            prompt_tokens = sum(it.get("input_tokens", 0) or 0 for it in iterations)
+            completion_tokens = sum(
+                it.get("output_tokens", 0) or 0 for it in iterations
+            )
+            cache_creation_input_tokens = sum(
+                it.get("cache_creation_input_tokens", 0) or 0 for it in iterations
+            )
+            cache_read_input_tokens = sum(
+                it.get("cache_read_input_tokens", 0) or 0 for it in iterations
+            )
+            prompt_tokens += cache_creation_input_tokens + cache_read_input_tokens
+
+        if not iterations:
+            if (
+                "cache_creation_input_tokens" in _usage
+                and _usage["cache_creation_input_tokens"] is not None
+            ):
+                cache_creation_input_tokens = _usage["cache_creation_input_tokens"]
+                prompt_tokens += cache_creation_input_tokens
+            if (
+                "cache_read_input_tokens" in _usage
+                and _usage["cache_read_input_tokens"] is not None
+            ):
+                cache_read_input_tokens = _usage["cache_read_input_tokens"]
+                prompt_tokens += cache_read_input_tokens
         if "server_tool_use" in _usage and _usage["server_tool_use"] is not None:
             if (
                 "web_search_requests" in _usage["server_tool_use"]
@@ -2260,7 +2283,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 ),
             )
 
-        raw_input_tokens = usage_object.get("input_tokens", 0) or 0
+        raw_input_tokens = (
+            prompt_tokens - cache_read_input_tokens - cache_creation_input_tokens
+        )
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens,
             cache_creation_tokens=cache_creation_input_tokens,
@@ -2292,6 +2317,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
             completion_tokens_details=completion_token_details,
+            iterations=iterations,
             server_tool_use=(
                 ServerToolUse(
                     web_search_requests=web_search_requests,
