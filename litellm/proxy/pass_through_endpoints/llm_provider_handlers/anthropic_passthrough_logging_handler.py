@@ -354,15 +354,6 @@ class AnthropicPassthroughLoggingHandler:
             if chunk_model:
                 model = chunk_model
 
-        complete_streaming_response = (
-            AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
-                all_chunks=all_chunks,
-                litellm_logging_obj=litellm_logging_obj,
-                model=model,
-            )
-            if chunk_model:
-                model = chunk_model
-
         try:
             complete_streaming_response = (
                 AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
