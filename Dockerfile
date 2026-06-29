@@ -83,6 +83,8 @@ RUN apk add --no-cache bash openssl tzdata nodejs npm python3 libsndfile && \
 WORKDIR /app
 ENV PATH="/app/.venv/bin:${PATH}"
 
+COPY --from=uvbin /uv /usr/local/bin/uv
+COPY --from=uvbin /uvx /usr/local/bin/uvx
 COPY --from=builder /app /app
 # Prisma binaries live in $HOME/.cache (default prisma-python location),
 # which is /root/.cache here. Copy only the Prisma subdirs — copying the
