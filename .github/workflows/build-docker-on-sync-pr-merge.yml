@@ -31,9 +31,19 @@ jobs:
 
           echo "upstream_tag=${upstream_tag}" >> "${GITHUB_OUTPUT}"
 
+  checks:
+    name: Checks
+    needs: resolve-upstream-tag
+    if: needs.resolve-upstream-tag.outputs.upstream_tag != ''
+    permissions:
+      contents: read
+    uses: ./.github/workflows/checks.yml
+    with:
+      ref: litellm_internal_staging
+
   build-image:
     name: Build Docker Image
-    needs: resolve-upstream-tag
+    needs: [resolve-upstream-tag, checks]
     if: needs.resolve-upstream-tag.outputs.upstream_tag != ''
     permissions:
       contents: read
