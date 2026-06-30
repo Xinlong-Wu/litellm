@@ -4,6 +4,7 @@ import os
 import sys
 from datetime import datetime
 from logging import Formatter
+from logging.handlers import TimedRotatingFileHandler
 from typing import Any, Dict, Optional
 
 from litellm.litellm_core_utils.secret_redaction import redact_string
@@ -310,6 +311,118 @@ def _get_loggers_to_initialize():
     return loggers
 
 
+# ----------------------------------------------------------------------------
+# Optional file logging (write logs to a directory, rotated daily)
+# ----------------------------------------------------------------------------
+
+DEFAULT_LOG_FILENAME = "litellm.log"
+UVICORN_LOG_FILENAME = "uvicorn.log"
+
+# Tracks the file handler currently attached to the litellm loggers so re-init
+# (e.g. toggling JSON) can rebuild it without leaking duplicate handlers.
+_app_file_handler: Optional[logging.Handler] = None
+
+
+def _get_log_retention_days() -> int:
+    raw = os.getenv("LITELLM_LOG_RETENTION_DAYS", "14")
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 14
+
+
+def _resolve_app_log_file() -> Optional[str]:
+    """Resolve the application log file path from env, or None if unconfigured.
+
+    LITELLM_LOG_FILE (explicit path) wins; otherwise LITELLM_LOG_DIR/litellm.log.
+    """
+    log_file = os.getenv("LITELLM_LOG_FILE")
+    if log_file:
+        return log_file
+    log_dir = os.getenv("LITELLM_LOG_DIR")
+    if log_dir:
+        return os.path.join(log_dir, DEFAULT_LOG_FILENAME)
+    return None
+
+
+def resolve_uvicorn_log_file() -> Optional[str]:
+    """Resolve the uvicorn log file path (separate from the application log)."""
+    log_dir = os.getenv("LITELLM_LOG_DIR")
+    if log_dir:
+        return os.path.join(log_dir, UVICORN_LOG_FILENAME)
+    return None
+
+
+def _get_file_text_formatter() -> logging.Formatter:
+    """Plain (no ANSI color) formatter for log files."""
+    return logging.Formatter(
+        "%(asctime)s - %(name)s:%(levelname)s: %(filename)s:%(lineno)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+
+def _build_timed_file_handler(path: str, use_json: bool) -> TimedRotatingFileHandler:
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    file_handler = TimedRotatingFileHandler(
+        path,
+        when="midnight",
+        backupCount=_get_log_retention_days(),
+        delay=True,
+        encoding="utf-8",
+    )
+    file_handler.setLevel(numeric_level)
+    file_handler.addFilter(_secret_filter)
+    file_handler.setFormatter(
+        JsonFormatter() if use_json else _get_file_text_formatter()
+    )
+    return file_handler
+
+
+def add_file_logging(
+    path: Optional[str] = None, use_json: Optional[bool] = None
+) -> Optional[str]:
+    """Attach a daily-rotating file handler to the litellm loggers.
+
+    Resolves ``path`` from the argument, then from LITELLM_LOG_FILE / LITELLM_LOG_DIR.
+    Returns the resolved path (or None if file logging is not configured).
+    Idempotent: an existing litellm-managed file handler is replaced, not duplicated.
+    """
+    global _app_file_handler
+
+    resolved = path or _resolve_app_log_file()
+    if not resolved:
+        return None
+    if use_json is None:
+        use_json = json_logs
+
+    # Attach to the same core loggers as the stream handler. Avoid
+    # _get_loggers_to_initialize() here: it reads litellm.success_callback,
+    # which is not defined yet during the import-time call.
+    loggers = [verbose_logger, verbose_router_logger, verbose_proxy_logger]
+    if _app_file_handler is not None:
+        for lg in loggers:
+            if _app_file_handler in lg.handlers:
+                lg.removeHandler(_app_file_handler)
+
+    _app_file_handler = _build_timed_file_handler(resolved, use_json)
+    for lg in loggers:
+        lg.addHandler(_app_file_handler)
+    return resolved
+
+
+def _reattach_app_file_handler(use_json: bool) -> None:
+    """Re-attach the file handler after loggers were cleared/re-initialized."""
+    if _resolve_app_log_file() is not None:
+        add_file_logging(use_json=use_json)
+
+
+# Enable file logging at import time when LITELLM_LOG_DIR / LITELLM_LOG_FILE is set,
+# so simply exporting the env var and starting the proxy is enough.
+add_file_logging()
+
+
 def _initialize_loggers_with_handler(handler: logging.Handler):
     """
     Initialize all loggers with a handler
@@ -317,71 +430,129 @@ def _initialize_loggers_with_handler(handler: logging.Handler):
     - Adds a handler to each logger
     - Prevents bubbling to parent/root (critical to prevent duplicate JSON logs)
     """
+    global _app_file_handler
     handler.addFilter(_secret_filter)
+    _app_file_handler = None  # handlers are cleared below; drop the stale reference
     for lg in _get_loggers_to_initialize():
         lg.handlers.clear()  # remove any existing handlers
         lg.addHandler(handler)  # add JSON formatter handler
         lg.propagate = False  # prevent bubbling to parent/root
 
 
-def _get_uvicorn_json_log_config():
+def _get_uvicorn_log_config(use_json: bool):
     """
-    Generate a uvicorn log_config dictionary that applies JSON formatting to all loggers.
+    Generate a uvicorn log_config dict.
 
-    This ensures that uvicorn's access logs, error logs, and all application logs
-    are formatted as JSON when json_logs is enabled.
+    - In JSON mode all uvicorn loggers use the JSON formatter.
+    - In text mode stdout keeps uvicorn's standard (optionally colored) formatters.
+    - When LITELLM_LOG_DIR is set, a daily-rotating file handler writing to
+      ``<dir>/uvicorn.log`` (separate from the application log) is added so
+      uvicorn access/error logs also land on disk.
     """
-    json_formatter_class = "litellm._logging.JsonFormatter"
-
-    # Use the module-level log_level variable for consistency
     uvicorn_log_level = log_level.upper()
+    json_formatter_class = "litellm._logging.JsonFormatter"
+    default_fmt = "%(asctime)s %(levelprefix)s %(message)s"
+    access_fmt = (
+        "%(asctime)s %(levelprefix)s %(client_addr)s - "
+        '"%(request_line)s" %(status_code)s'
+    )
 
-    log_config = {
+    formatters: Dict[str, Any] = {
+        "json": {"()": json_formatter_class},
+        "default": {
+            "()": "uvicorn.logging.DefaultFormatter",
+            "fmt": default_fmt,
+            "use_colors": True,
+        },
+        "access": {
+            "()": "uvicorn.logging.AccessFormatter",
+            "fmt": access_fmt,
+            "use_colors": True,
+        },
+        # No-ANSI variants for the file handlers
+        "default_plain": {
+            "()": "uvicorn.logging.DefaultFormatter",
+            "fmt": default_fmt,
+            "use_colors": False,
+        },
+        "access_plain": {
+            "()": "uvicorn.logging.AccessFormatter",
+            "fmt": access_fmt,
+            "use_colors": False,
+        },
+    }
+
+    stdout_default_formatter = "json" if use_json else "default"
+    stdout_access_formatter = "json" if use_json else "access"
+    handlers: Dict[str, Any] = {
+        "default": {
+            "formatter": stdout_default_formatter,
+            "class": "logging.StreamHandler",
+            "stream": "ext://sys.stdout",
+        },
+        "access": {
+            "formatter": stdout_access_formatter,
+            "class": "logging.StreamHandler",
+            "stream": "ext://sys.stdout",
+        },
+    }
+
+    default_handlers = ["default"]
+    access_handlers = ["access"]
+
+    uvicorn_log_file = resolve_uvicorn_log_file()
+    if uvicorn_log_file:
+        os.makedirs(os.path.dirname(uvicorn_log_file), exist_ok=True)
+        retention = _get_log_retention_days()
+        handlers["default_file"] = {
+            "formatter": "json" if use_json else "default_plain",
+            "class": "logging.handlers.TimedRotatingFileHandler",
+            "filename": uvicorn_log_file,
+            "when": "midnight",
+            "backupCount": retention,
+            "delay": True,
+            "encoding": "utf-8",
+        }
+        handlers["access_file"] = {
+            "formatter": "json" if use_json else "access_plain",
+            "class": "logging.handlers.TimedRotatingFileHandler",
+            "filename": uvicorn_log_file,
+            "when": "midnight",
+            "backupCount": retention,
+            "delay": True,
+            "encoding": "utf-8",
+        }
+        default_handlers = ["default", "default_file"]
+        access_handlers = ["access", "access_file"]
+
+    return {
         "version": 1,
         "disable_existing_loggers": False,
-        "formatters": {
-            "json": {
-                "()": json_formatter_class,
-            },
-            "default": {
-                "()": json_formatter_class,
-            },
-            "access": {
-                "()": json_formatter_class,
-            },
-        },
-        "handlers": {
-            "default": {
-                "formatter": "json",
-                "class": "logging.StreamHandler",
-                "stream": "ext://sys.stdout",
-            },
-            "access": {
-                "formatter": "access",
-                "class": "logging.StreamHandler",
-                "stream": "ext://sys.stdout",
-            },
-        },
+        "formatters": formatters,
+        "handlers": handlers,
         "loggers": {
             "uvicorn": {
-                "handlers": ["default"],
+                "handlers": default_handlers,
                 "level": uvicorn_log_level,
                 "propagate": False,
             },
             "uvicorn.error": {
-                "handlers": ["default"],
+                "handlers": default_handlers,
                 "level": uvicorn_log_level,
                 "propagate": False,
             },
             "uvicorn.access": {
-                "handlers": ["access"],
+                "handlers": access_handlers,
                 "level": uvicorn_log_level,
                 "propagate": False,
             },
         },
     }
 
-    return log_config
+
+def _get_uvicorn_json_log_config():
+    """Backwards-compatible JSON uvicorn log config (delegates to _get_uvicorn_log_config)."""
+    return _get_uvicorn_log_config(use_json=True)
 
 
 def _turn_on_json():
@@ -393,6 +564,8 @@ def _turn_on_json():
     handler = logging.StreamHandler()
     handler.setFormatter(JsonFormatter())
     _initialize_loggers_with_handler(handler)
+    # Keep file logging (now JSON-formatted) after handlers were cleared above
+    _reattach_app_file_handler(use_json=True)
     # Set up exception handlers
     _setup_json_exception_handlers(JsonFormatter())
 
