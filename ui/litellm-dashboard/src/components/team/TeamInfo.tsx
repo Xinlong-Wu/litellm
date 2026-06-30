@@ -37,6 +37,7 @@ import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import AgentSelector from "../agent_management/AgentSelector";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import DurationSelect from "../common_components/DurationSelect";
+import ModelGroupBudgetEditor from "../common_components/ModelGroupBudgetEditor";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
 import { unfurlWildcardModelsInList } from "../key_team_helpers/fetch_available_models_team_key";
 import GuardrailSettingsView from "../GuardrailSettingsView";
@@ -133,6 +134,7 @@ export interface TeamData {
       budget_duration: string;
       tpm_limit: number | null;
       rpm_limit: number | null;
+      model_group_max_budget?: Record<string, { max_budget?: number; budget_duration?: string }> | null;
     } | null;
   };
   keys: any[];
@@ -551,6 +553,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         updateData.team_member_budget = Number(values.team_member_budget);
       }
 
+      if (
+        values.team_member_model_group_max_budget &&
+        Object.keys(values.team_member_model_group_max_budget).length > 0
+      ) {
+        updateData.team_member_model_group_max_budget = values.team_member_model_group_max_budget;
+      }
+
       if (values.team_member_key_duration !== undefined) {
         updateData.team_member_key_duration = values.team_member_key_duration;
       }
@@ -952,6 +961,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       team_member_rpm_limit: info.team_member_budget_table?.rpm_limit,
                       team_member_budget: info.team_member_budget_table?.max_budget,
                       team_member_budget_duration: info.team_member_budget_table?.budget_duration,
+                      team_member_model_group_max_budget:
+                        info.team_member_budget_table?.model_group_max_budget || {},
                       guardrails: effectiveGuardrails,
                       policies: info.policies || [],
                       disable_global_guardrails: info.metadata?.disable_global_guardrails || false,
@@ -1089,6 +1100,19 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                             onChange={(value) => form.setFieldValue("team_member_budget_duration", value)}
                             value={form.getFieldValue("team_member_budget_duration")}
                           />
+                        </Form.Item>
+                        <Form.Item
+                          label={
+                            <span>
+                              Default Model Group Budgets{" "}
+                              <Tooltip title="Optional. Cap each member's dollar spend per access group. Spend on any model in the access group counts toward one budget. Overridable per member.">
+                                <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                              </Tooltip>
+                            </span>
+                          }
+                          name="team_member_model_group_max_budget"
+                        >
+                          <ModelGroupBudgetEditor />
                         </Form.Item>
                         <Form.Item
                           label="Default Key Duration (eg: 1d, 1mo)"

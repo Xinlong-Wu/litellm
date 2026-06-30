@@ -16,6 +16,8 @@ from litellm.types.utils import (
 
 VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX = "virtual_key_spend"
 END_USER_SPEND_CACHE_KEY_PREFIX = "end_user_model_spend"
+USER_GROUP_SPEND_CACHE_KEY_PREFIX = "user_model_group_spend"
+TEAM_MEMBER_GROUP_SPEND_CACHE_KEY_PREFIX = "team_member_model_group_spend"
 
 
 class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
@@ -140,6 +142,107 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
         return True
 
+    async def is_user_within_model_group_budget(
+        self,
+        user_id: str,
+        user_model_group_max_budget: dict,
+        groups: List[str],
+    ) -> bool:
+        """Check the user's aggregate spend (across all their keys) for each model group.
+
+        Raises BudgetExceededError if any matching group is over budget.
+        """
+        return await self._is_within_model_group_budget(
+            scope_prefix=USER_GROUP_SPEND_CACHE_KEY_PREFIX,
+            scope_id=user_id,
+            model_group_max_budget=user_model_group_max_budget,
+            groups=groups,
+            error_prefix=f"LiteLLM User={user_id}",
+        )
+
+    async def is_team_member_within_model_group_budget(
+        self,
+        user_id: str,
+        team_id: str,
+        team_member_model_group_max_budget: dict,
+        groups: List[str],
+    ) -> bool:
+        """Check a team member's per-group spend within their team.
+
+        Raises BudgetExceededError if any matching group is over budget.
+        """
+        return await self._is_within_model_group_budget(
+            scope_prefix=TEAM_MEMBER_GROUP_SPEND_CACHE_KEY_PREFIX,
+            scope_id=f"{user_id}:{team_id}",
+            model_group_max_budget=team_member_model_group_max_budget,
+            groups=groups,
+            error_prefix=f"LiteLLM User={user_id} in Team={team_id}",
+        )
+
+    async def _is_within_model_group_budget(
+        self,
+        *,
+        scope_prefix: str,
+        scope_id: str,
+        model_group_max_budget: dict,
+        groups: List[str],
+        error_prefix: str,
+    ) -> bool:
+        for group in groups:
+            budget_config = self._group_budget_config(model_group_max_budget, group)
+            if budget_config is None:
+                continue
+            spend_key = (
+                f"{scope_prefix}:{scope_id}:{group}:{budget_config.budget_duration}"
+            )
+            current_spend = await self.dual_cache.async_get_cache(key=spend_key) or 0.0
+            if (
+                budget_config.max_budget is not None
+                and current_spend > budget_config.max_budget
+            ):
+                raise litellm.BudgetExceededError(
+                    message=f"{error_prefix}, exceeded budget for model group={group}",
+                    current_cost=current_spend,
+                    max_budget=budget_config.max_budget,
+                )
+        return True
+
+    @staticmethod
+    def _group_budget_config(
+        model_group_max_budget: dict, group: str
+    ) -> Optional[BudgetConfig]:
+        budget_info = model_group_max_budget.get(group)
+        if budget_info is None:
+            return None
+        budget_config = BudgetConfig(**budget_info)
+        if not budget_config.max_budget or budget_config.max_budget <= 0:
+            return None
+        return budget_config
+
+    async def _increment_model_group_spend(
+        self,
+        *,
+        scope_prefix: str,
+        scope_id: str,
+        model_group_max_budget: dict,
+        groups: List[str],
+        response_cost: float,
+    ) -> None:
+        for group in groups:
+            budget_config = self._group_budget_config(model_group_max_budget, group)
+            if budget_config is None or not budget_config.budget_duration:
+                continue
+            spend_key = (
+                f"{scope_prefix}:{scope_id}:{group}:{budget_config.budget_duration}"
+            )
+            start_time_key = f"{scope_prefix}_start_time:{scope_id}:{group}"
+            await self._increment_spend_for_key(
+                budget_config=budget_config,
+                spend_key=spend_key,
+                start_time_key=start_time_key,
+                response_cost=response_cost,
+            )
+
     async def _get_end_user_spend_for_model(
         self,
         end_user_id: str,
@@ -243,15 +346,22 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         user_api_key_end_user_model_max_budget: Optional[dict] = _metadata.get(
             "user_api_key_end_user_model_max_budget", None
         )
-        if (
-            user_api_key_model_max_budget is None
-            or len(user_api_key_model_max_budget) == 0
-        ) and (
-            user_api_key_end_user_model_max_budget is None
-            or len(user_api_key_end_user_model_max_budget) == 0
+        user_model_group_max_budget: Optional[dict] = _metadata.get(
+            "user_api_key_user_model_group_max_budget", None
+        )
+        team_member_model_group_max_budget: Optional[dict] = _metadata.get(
+            "user_api_key_team_member_model_group_max_budget", None
+        )
+        if not any(
+            (
+                user_api_key_model_max_budget,
+                user_api_key_end_user_model_max_budget,
+                user_model_group_max_budget,
+                team_member_model_group_max_budget,
+            )
         ):
             verbose_proxy_logger.debug(
-                "Not running _PROXY_VirtualKeyModelMaxBudgetLimiter.async_log_success_event because user_api_key_model_max_budget and user_api_key_end_user_model_max_budget are None or empty."
+                "Not running _PROXY_VirtualKeyModelMaxBudgetLimiter.async_log_success_event because no model or model-group budgets are configured."
             )
             return
 
@@ -319,6 +429,55 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                     start_time_key=end_user_start_time_key,
                     response_cost=response_cost,
                 )
+
+        if user_model_group_max_budget or team_member_model_group_max_budget:
+            from litellm.proxy.auth.auth_checks import get_budgeted_groups_for_model
+            from litellm.proxy.proxy_server import (
+                llm_router,
+                prisma_client,
+                proxy_logging_obj,
+                user_api_key_cache,
+            )
+
+            sl_metadata: dict = standard_logging_payload.get("metadata", {}) or {}
+            user_id = sl_metadata.get("user_api_key_user_id")
+            team_id = sl_metadata.get("user_api_key_team_id")
+
+            if user_id and user_model_group_max_budget:
+                user_groups = await get_budgeted_groups_for_model(
+                    model=model,
+                    model_group_max_budget=user_model_group_max_budget,
+                    llm_router=llm_router,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                if user_groups:
+                    await self._increment_model_group_spend(
+                        scope_prefix=USER_GROUP_SPEND_CACHE_KEY_PREFIX,
+                        scope_id=user_id,
+                        model_group_max_budget=user_model_group_max_budget,
+                        groups=user_groups,
+                        response_cost=response_cost,
+                    )
+
+            if user_id and team_id and team_member_model_group_max_budget:
+                team_groups = await get_budgeted_groups_for_model(
+                    model=model,
+                    model_group_max_budget=team_member_model_group_max_budget,
+                    llm_router=llm_router,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                if team_groups:
+                    await self._increment_model_group_spend(
+                        scope_prefix=TEAM_MEMBER_GROUP_SPEND_CACHE_KEY_PREFIX,
+                        scope_id=f"{user_id}:{team_id}",
+                        model_group_max_budget=team_member_model_group_max_budget,
+                        groups=team_groups,
+                        response_cost=response_cost,
+                    )
 
         if self.dual_cache.redis_cache is not None:
             await self._push_in_memory_increments_to_redis()

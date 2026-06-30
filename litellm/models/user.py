@@ -41,6 +41,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     policies: List[str] = []
     model_spend: Optional[Dict] = {}
     model_max_budget: Optional[Dict] = {}
+    model_group_max_budget: Optional[Dict] = {}
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     organization_memberships: Optional[List[LiteLLM_OrganizationMembershipTable]] = None
