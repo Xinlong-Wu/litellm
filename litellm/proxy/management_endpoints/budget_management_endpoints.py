@@ -292,6 +292,7 @@ async def budget_settings(
         "max_budget": {"type": "Float"},
         "soft_budget": {"type": "Float"},
         "model_max_budget": {"type": "Object"},
+        "model_group_max_budget": {"type": "Object"},
     }
 
     return_val = []
