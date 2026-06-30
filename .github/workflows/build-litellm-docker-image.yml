@@ -127,5 +127,5 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ steps.metadata.outputs.revision }}
             org.opencontainers.image.version=${{ inputs.upstream_tag }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ inputs.ref }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.ref }}
