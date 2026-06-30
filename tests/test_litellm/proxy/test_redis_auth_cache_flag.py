@@ -70,6 +70,11 @@ def _patched_init_cache(litellm_settings: dict, cache_params: dict):
     with (
         patch.object(ps, "user_api_key_cache", fresh_user_cache),
         patch.object(ps, "spend_counter_cache", fresh_spend_cache),
+        # _init_cache also mutates the module-global litellm_config_cache
+        # (litellm_config_cache.redis_cache = ...). Redirect that to a throwaway so
+        # the fake Redis (no _circuit_breaker) can't leak into other tests sharing
+        # the worker process and 500 them via invalidate_config_param.
+        patch.object(ps, "litellm_config_cache", DualCache()),
         patch.object(ps, "llm_router", None),
         # Cache is locally imported inside _init_cache: patch it at source.
         patch("litellm.Cache", return_value=mock_litellm_cache),
