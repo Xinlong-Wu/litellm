@@ -196,9 +196,19 @@ jobs:
             --title "Sync upstream LiteLLM ${TAG}" \
             --body "${body}"
 
+  checks:
+    name: Checks
+    needs: sync-upstream
+    if: needs.sync-upstream.outputs.pr_required != 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/checks.yml
+    with:
+      ref: litellm_internal_staging
+
   build-image:
     name: Build Docker Image
-    needs: sync-upstream
+    needs: [sync-upstream, checks]
     if: needs.sync-upstream.outputs.pr_required != 'true'
     permissions:
       contents: read

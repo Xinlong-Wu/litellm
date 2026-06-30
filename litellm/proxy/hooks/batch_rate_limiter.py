@@ -20,6 +20,7 @@ Quick summary:
 from typing import (
     TYPE_CHECKING,
     Any,
+    Collection,
     Dict,
     List,
     Literal,
@@ -611,7 +612,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             if user_api_key_dict is not None:
                 await self._enforce_batch_file_model_access(
                     user_api_key_dict=user_api_key_dict,
-                    file_content_as_dict=file_content_as_dict,
+                    models=models,
                     target_model_names=target_model_names or None,
                 )
 
@@ -642,7 +643,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
     async def _enforce_batch_file_model_access(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        file_content_as_dict: List[dict],
+        models: Collection[str],
         target_model_names: Optional[List[str]] = None,
     ) -> None:
         """Reject the batch if the caller is not authorized for the upload target.
@@ -666,12 +667,9 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         from litellm.proxy.proxy_server import proxy_logging_obj
         from litellm.proxy.proxy_server import user_api_key_cache
 
-        if target_model_names:
-            models = target_model_names
-        else:
-            models = _get_models_from_batch_input_file_content(file_content_as_dict)
-            if not models:
-                return
+        models_to_check = target_model_names if target_model_names else models
+        if not models_to_check:
+            return
 
         team_object = None
         if (
@@ -701,7 +699,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 ) from e
 
         llm_model_list = llm_router.model_list if llm_router is not None else None
-        for model in models:
+        for model in models_to_check:
             model_to_check = model
             try:
                 if team_object is not None:
