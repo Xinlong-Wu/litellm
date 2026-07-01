@@ -74,6 +74,9 @@ RUN apk add --no-cache bash openssl tzdata nodejs python3 libsndfile
 WORKDIR /app
 ENV PATH="/app/.venv/bin:${PATH}"
 
+COPY --from=uvbin /uv /usr/local/bin/uv
+COPY --from=uvbin /uvx /usr/local/bin/uvx
+
 # Copy only what runtime needs. The application is installed inside the venv;
 # the rest of the builder's /app is source and build metadata that must not
 # ship (manifest-scanning tools attribute everything in it to this image).
