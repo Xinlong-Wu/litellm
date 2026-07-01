@@ -333,6 +333,7 @@ async def test_cache_hit_includes_custom_llm_provider():
 # ---------------------------------------------------------------------------
 # File logging: write logs to a directory (daily rotation)
 # ---------------------------------------------------------------------------
+import glob
 import logging.handlers
 
 import litellm._logging as _logging_module
@@ -340,7 +341,9 @@ from litellm._logging import (
     add_file_logging,
     resolve_uvicorn_log_file,
     _get_uvicorn_log_config,
+    _lockfile_for,
     _reattach_app_file_handler,
+    _SharedRotatingFileHandler,
 )
 
 _FILE_LOG_LOGGERS = [verbose_logger, verbose_router_logger, verbose_proxy_logger]
@@ -391,9 +394,7 @@ def test_add_file_logging_is_idempotent(tmp_path, clean_file_logging):
 
     for lg in _FILE_LOG_LOGGERS:
         file_handlers = [
-            h
-            for h in lg.handlers
-            if isinstance(h, logging.handlers.TimedRotatingFileHandler)
+            h for h in lg.handlers if isinstance(h, _SharedRotatingFileHandler)
         ]
         assert len(file_handlers) == 1
 
@@ -410,9 +411,55 @@ def test_file_handler_is_daily_rotating_with_retention(
     add_file_logging(str(tmp_path / "litellm.log"))
 
     handler = _logging_module._app_file_handler
-    assert isinstance(handler, logging.handlers.TimedRotatingFileHandler)
+    assert isinstance(handler, _SharedRotatingFileHandler)
     assert handler.when == "MIDNIGHT"
     assert handler.backupCount == 7
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="flock is POSIX-only")
+def test_rollover_is_mutually_exclusive_across_holders(tmp_path, clean_file_logging):
+    """While another holder owns the lock, _maybe_rollover must not rotate; once
+    released, exactly one dated file is produced."""
+    import fcntl
+
+    log_file = tmp_path / "litellm.log"
+    handler = add_file_logging(str(log_file)) and _logging_module._app_file_handler
+    verbose_proxy_logger.error("before-rotate")
+
+    def dated_files():
+        return [
+            p for p in glob.glob(str(log_file) + ".*") if not p.endswith(".rotate.lock")
+        ]
+
+    # Hold the rotation lock from an independent fd -> handler cannot rotate.
+    lock_fd = os.open(_lockfile_for(str(log_file)), os.O_CREAT | os.O_RDWR, 0o644)
+    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    handler._maybe_rollover()
+    assert dated_files() == []  # contended -> skipped
+    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    os.close(lock_fd)
+
+    # Now it wins the lock and rotates exactly once.
+    handler._maybe_rollover()
+    dated = dated_files()
+    assert len(dated) == 1
+    assert "before-rotate" in open(dated[0]).read()
+
+
+def test_follower_reopens_new_base_after_rotation(tmp_path, clean_file_logging):
+    """After rotation the base file is recreated on the next emit and old lines
+    are not carried over."""
+    log_file = tmp_path / "litellm.log"
+    handler = add_file_logging(str(log_file)) and _logging_module._app_file_handler
+    verbose_proxy_logger.error("old-line")
+
+    handler._maybe_rollover()  # renames base -> dated (delay=True: base absent until next write)
+    verbose_proxy_logger.error("new-line")
+
+    assert log_file.exists()
+    content = log_file.read_text()
+    assert "new-line" in content
+    assert "old-line" not in content
 
 
 def test_file_log_is_redacted_and_has_no_ansi(tmp_path, clean_file_logging):
@@ -447,21 +494,22 @@ def test_reattach_uses_json_formatter(tmp_path, clean_file_logging, monkeypatch)
     assert isinstance(handler.formatter, JsonFormatter)
 
 
-def test_uvicorn_log_config_adds_file_handlers_when_dir_set(
+def test_uvicorn_log_config_adds_file_handler_when_dir_set(
     tmp_path, clean_file_logging, monkeypatch
 ):
     monkeypatch.setenv("LITELLM_LOG_DIR", str(tmp_path))
     assert resolve_uvicorn_log_file() == str(tmp_path / "uvicorn.log")
 
     cfg = _get_uvicorn_log_config(use_json=False)
-    assert "default_file" in cfg["handlers"]
-    assert "access_file" in cfg["handlers"]
-    assert cfg["handlers"]["access_file"]["filename"] == str(tmp_path / "uvicorn.log")
-    assert "access_file" in cfg["loggers"]["uvicorn.access"]["handlers"]
+    file_handler = cfg["handlers"]["file"]
+    assert file_handler["()"] == "litellm._logging._SharedRotatingFileHandler"
+    assert file_handler["filename"] == str(tmp_path / "uvicorn.log")
+    # the single shared file handler is attached to all uvicorn loggers
+    assert "file" in cfg["loggers"]["uvicorn.access"]["handlers"]
+    assert "file" in cfg["loggers"]["uvicorn.error"]["handlers"]
 
 
 def test_uvicorn_log_config_no_file_handlers_without_dir(clean_file_logging):
     cfg = _get_uvicorn_log_config(use_json=True)
-    assert "default_file" not in cfg["handlers"]
-    assert "access_file" not in cfg["handlers"]
+    assert "file" not in cfg["handlers"]
     assert cfg["loggers"]["uvicorn.access"]["handlers"] == ["access"]

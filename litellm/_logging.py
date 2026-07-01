@@ -2,6 +2,7 @@ import ast
 import logging
 import os
 import sys
+import time
 from datetime import datetime
 from logging import Formatter
 from logging.handlers import TimedRotatingFileHandler
@@ -10,6 +11,39 @@ from typing import Any, Dict, Optional
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+
+# OS-dispatched import for the advisory file lock used to serialize daily log
+# rotation across processes. Each platform imports only the stdlib module it is
+# guaranteed to have, so importing this module is safe everywhere.
+if sys.platform == "win32":  # pragma: no cover - Windows-only
+    import msvcrt
+else:
+    import fcntl
+
+
+def _try_lock_nb(fd: int) -> bool:
+    """Non-blocking exclusive advisory lock. True if acquired, False if contended."""
+    try:
+        if sys.platform == "win32":
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:  # BlockingIOError (contended) is an OSError subclass
+        return False
+
+
+def _unlock(fd: int) -> None:
+    try:
+        if sys.platform == "win32":
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+
 
 set_verbose = False
 
@@ -361,23 +395,124 @@ def _get_file_text_formatter() -> logging.Formatter:
     )
 
 
-def _build_timed_file_handler(path: str, use_json: bool) -> TimedRotatingFileHandler:
-    parent = os.path.dirname(path)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
-    file_handler = TimedRotatingFileHandler(
-        path,
-        when="midnight",
+def _lockfile_for(path: str) -> str:
+    """Sidecar lock file path used to serialize rotation across processes."""
+    parent = os.path.dirname(path) or "."
+    return os.path.join(parent, "." + os.path.basename(path) + ".rotate.lock")
+
+
+class _SharedRotatingFileHandler(TimedRotatingFileHandler):
+    """Daily-rotating file handler safe for multiple processes sharing one file.
+
+    All processes append to the same file. Rotation is emit-driven (no background
+    threads, so it is fork/spawn-safe under multi-worker servers): the first
+    process to log after local midnight tries a short-lived advisory ``flock`` on
+    ``lockfile`` and, if it wins, renames the base file to a dated one. Peers that
+    lose the race - or that already see the rotated file - detect the inode change
+    on their next ``emit`` and reopen the new file (``WatchedFileHandler``
+    behavior). Fork-safe because the lock fd is opened fresh per attempt and never
+    held between rotations.
+    """
+
+    def __init__(
+        self,
+        filename: str,
+        lockfile: str,
+        backupCount: int = 14,
+        encoding: str = "utf-8",
+        delay: bool = True,
+        use_json: bool = False,
+    ) -> None:
+        parent = os.path.dirname(filename)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        super().__init__(
+            filename,
+            when="midnight",
+            backupCount=backupCount,
+            encoding=encoding,
+            delay=delay,
+        )
+        self._lockfile = lockfile
+        self.addFilter(_secret_filter)
+        self.setLevel(numeric_level)
+        self.setFormatter(JsonFormatter() if use_json else _get_file_text_formatter())
+        self._dev: Optional[int] = None
+        self._ino: Optional[int] = None
+        self._update_dev_ino()
+
+    def _stat_base(self):
+        try:
+            st = os.stat(self.baseFilename)
+            return st.st_dev, st.st_ino
+        except FileNotFoundError:
+            return None, None
+
+    def _update_dev_ino(self) -> None:
+        self._dev, self._ino = self._stat_base()
+
+    def _reopen_if_changed(self) -> None:
+        """Reopen the base file if a peer rotated it out from under us."""
+        dev, ino = self._stat_base()
+        if (
+            dev is not None
+            and self._dev is not None
+            and (dev != self._dev or ino != self._ino)
+            and self.stream is not None
+        ):
+            self.stream.flush()
+            self.stream.close()
+            self.stream = self._open()
+            self._update_dev_ino()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self._reopen_if_changed()
+        except Exception:
+            pass
+        super().emit(
+            record
+        )  # BaseRotatingHandler.emit -> shouldRollover -> doRollover, then write
+        if self._dev is None and self.stream is not None:
+            # First open under delay=True - record file identity now.
+            self._update_dev_ino()
+
+    def doRollover(self) -> None:
+        """Rotate under a cross-process lock; only the lock winner renames.
+
+        Invoked by the base ``emit`` when the period has elapsed (or directly by
+        tests). Losers just adopt the peer's freshly rotated file and reschedule.
+        """
+        fd = os.open(self._lockfile, os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            if _try_lock_nb(fd):
+                try:
+                    _, ino = self._stat_base()
+                    # Only rename if nobody has rotated this file already.
+                    if ino is not None and (self._ino is None or ino == self._ino):
+                        super().doRollover()
+                        self._update_dev_ino()
+                        return
+                finally:
+                    _unlock(fd)
+        finally:
+            os.close(fd)
+        # Lost the race or already rotated: adopt the new file, defer next attempt.
+        self._reopen_if_changed()
+        self.rolloverAt = self.computeRollover(int(time.time()))
+
+    # Test/utility hook: force a gated rotation attempt now.
+    def _maybe_rollover(self) -> None:
+        self.doRollover()
+
+
+def _build_file_handler(path: str, use_json: bool) -> _SharedRotatingFileHandler:
+    return _SharedRotatingFileHandler(
+        filename=path,
+        lockfile=_lockfile_for(path),
         backupCount=_get_log_retention_days(),
-        delay=True,
-        encoding="utf-8",
+        use_json=use_json,
     )
-    file_handler.setLevel(numeric_level)
-    file_handler.addFilter(_secret_filter)
-    file_handler.setFormatter(
-        JsonFormatter() if use_json else _get_file_text_formatter()
-    )
-    return file_handler
 
 
 def add_file_logging(
@@ -406,7 +541,7 @@ def add_file_logging(
             if _app_file_handler in lg.handlers:
                 lg.removeHandler(_app_file_handler)
 
-    _app_file_handler = _build_timed_file_handler(resolved, use_json)
+    _app_file_handler = _build_file_handler(resolved, use_json)
     for lg in loggers:
         lg.addHandler(_app_file_handler)
     return resolved
@@ -469,17 +604,6 @@ def _get_uvicorn_log_config(use_json: bool):
             "fmt": access_fmt,
             "use_colors": True,
         },
-        # No-ANSI variants for the file handlers
-        "default_plain": {
-            "()": "uvicorn.logging.DefaultFormatter",
-            "fmt": default_fmt,
-            "use_colors": False,
-        },
-        "access_plain": {
-            "()": "uvicorn.logging.AccessFormatter",
-            "fmt": access_fmt,
-            "use_colors": False,
-        },
     }
 
     stdout_default_formatter = "json" if use_json else "default"
@@ -502,28 +626,18 @@ def _get_uvicorn_log_config(use_json: bool):
 
     uvicorn_log_file = resolve_uvicorn_log_file()
     if uvicorn_log_file:
-        os.makedirs(os.path.dirname(uvicorn_log_file), exist_ok=True)
-        retention = _get_log_retention_days()
-        handlers["default_file"] = {
-            "formatter": "json" if use_json else "default_plain",
-            "class": "logging.handlers.TimedRotatingFileHandler",
+        # One shared, multi-process-safe file handler for all uvicorn loggers.
+        # It self-formats (JSON or plain text) and rotates daily via flock, so no
+        # dictConfig formatter is attached here.
+        handlers["file"] = {
+            "()": "litellm._logging._SharedRotatingFileHandler",
             "filename": uvicorn_log_file,
-            "when": "midnight",
-            "backupCount": retention,
-            "delay": True,
-            "encoding": "utf-8",
+            "lockfile": _lockfile_for(uvicorn_log_file),
+            "backupCount": _get_log_retention_days(),
+            "use_json": use_json,
         }
-        handlers["access_file"] = {
-            "formatter": "json" if use_json else "access_plain",
-            "class": "logging.handlers.TimedRotatingFileHandler",
-            "filename": uvicorn_log_file,
-            "when": "midnight",
-            "backupCount": retention,
-            "delay": True,
-            "encoding": "utf-8",
-        }
-        default_handlers = ["default", "default_file"]
-        access_handlers = ["access", "access_file"]
+        default_handlers = ["default", "file"]
+        access_handlers = ["access", "file"]
 
     return {
         "version": 1,
