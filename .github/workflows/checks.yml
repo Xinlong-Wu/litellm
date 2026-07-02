@@ -161,7 +161,7 @@ jobs:
           uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
 
       - name: Build Admin UI
-        if: matrix.name == 'proxy-server'
+        if: matrix.name == 'proxy-server' || matrix.name == 'proxy-infra'
         run: bash docker/build_admin_ui.sh
 
       - name: Run unit tests
