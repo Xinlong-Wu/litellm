@@ -47,8 +47,14 @@ RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-gr
 # Copy full source tree
 COPY . .
 
-# Build Admin UI before final sync
-RUN sed -i 's/\r$//' docker/build_admin_ui.sh && chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
+RUN test -f litellm/proxy/_experimental/out/index.html && \
+    test -d litellm/proxy/_experimental/out/_next || \
+    (echo "Admin UI assets missing. Run ./docker/build_admin_ui.sh before docker build." >&2; exit 1)
+
+RUN mkdir -p /var/lib/litellm/ui /var/lib/litellm/assets && \
+    cp -r /app/litellm/proxy/_experimental/out/. /var/lib/litellm/ui/ && \
+    cp /app/litellm/proxy/logo.jpg /var/lib/litellm/assets/logo.jpg && \
+    touch /var/lib/litellm/ui/.litellm_ui_ready
 
 # Install project and workspace packages (fast - deps already cached)
 RUN uv sync --frozen --no-default-groups --no-editable \
@@ -72,7 +78,9 @@ USER root
 RUN apk add --no-cache bash openssl tzdata nodejs python3 libsndfile
 
 WORKDIR /app
-ENV PATH="/app/.venv/bin:${PATH}"
+ENV PATH="/app/.venv/bin:${PATH}" \
+    LITELLM_UI_PATH=/var/lib/litellm/ui \
+    LITELLM_ASSETS_PATH=/var/lib/litellm/assets
 
 COPY --from=uvbin /uv /usr/local/bin/uv
 COPY --from=uvbin /uvx /usr/local/bin/uvx
@@ -89,6 +97,8 @@ COPY --from=builder /app/litellm/proxy/prisma_migration.py /app/litellm/proxy/pr
 # working directory on sys.path; litellm/proxy/hooks resolves
 # enterprise.enterprise_hooks from it)
 COPY --from=builder /app/enterprise /app/enterprise
+COPY --from=builder /var/lib/litellm/ui /var/lib/litellm/ui
+COPY --from=builder /var/lib/litellm/assets /var/lib/litellm/assets
 # Prisma binaries live in $HOME/.cache (default prisma-python location),
 # which is /root/.cache here. Copy only the Prisma subdirs — copying the
 # whole /root/.cache drags in the uv build cache (~660 MB, includes a

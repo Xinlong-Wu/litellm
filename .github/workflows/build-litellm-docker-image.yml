@@ -101,6 +101,10 @@ jobs:
           sudo apt-get clean
           df -h /
 
+      - name: Build Admin UI
+        if: steps.existing.outputs.exists != 'true'
+        run: bash docker/build_admin_ui.sh
+
       - name: Set up QEMU
         if: steps.existing.outputs.exists != 'true'
         uses: docker/setup-qemu-action@v4

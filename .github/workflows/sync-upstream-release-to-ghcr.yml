@@ -88,12 +88,23 @@ jobs:
           upstream_commit="$(git rev-list -n 1 "refs/tags/${TAG}")"
           synced_commit="$(git log --fixed-strings --grep="Upstream commit: ${upstream_commit}" -n 1 --format=%H)"
           sync_branch="upstream-release/${TAG}"
+          preserved_paths=(
+            ".github/workflows"
+            "litellm/proxy/_experimental/out"
+          )
+
+          restore_preserved_paths() {
+            source_ref="$1"
+            for path in "${preserved_paths[@]}"; do
+              git restore --source="${source_ref}" --staged --worktree -- "${path}" 2>/dev/null || true
+            done
+          }
 
           commit_sync() {
             git commit --allow-empty \
               -m "Sync upstream LiteLLM ${TAG}" \
               -m "Upstream commit: ${upstream_commit}" \
-              -m "The .github/workflows directory is intentionally kept from ${DOWNSTREAM_BRANCH}."
+              -m "Downstream GitHub workflows and prebuilt dashboard output are intentionally kept from ${DOWNSTREAM_BRANCH}."
           }
 
           write_pr_outputs() {
@@ -118,26 +129,32 @@ jobs:
             echo "Downstream ${DOWNSTREAM_BRANCH} already contains upstream release ${TAG}."
           else
             if ! git merge --squash --no-commit "refs/tags/${TAG}"; then
-              conflict_files="$(git diff --name-only --diff-filter=U | sed 's/^/- /')"
-              git reset --hard
-              git checkout -B "${sync_branch}" "${upstream_commit}"
-              git restore --source="origin/${DOWNSTREAM_BRANCH}" --staged --worktree -- .github/workflows || true
-              git commit --allow-empty \
-                -m "Keep downstream GitHub workflows for ${TAG}" \
-                -m "Upstream commit: ${upstream_commit}" \
-                -m "Non-workflow merge conflicts must be resolved in the pull request."
-              git push origin "HEAD:refs/heads/${sync_branch}" --force
-              write_pr_outputs "Automatic merge of upstream release ${TAG} into ${DOWNSTREAM_BRANCH} had conflicts outside .github/workflows. Resolve these files in the PR before merging." "${conflict_files}"
-              exit 0
-            else
-              git restore --source=HEAD --staged --worktree -- .github/workflows || true
-              commit_sync
-
-              if ! git push origin "HEAD:refs/heads/${DOWNSTREAM_BRANCH}"; then
-                push_pr_branch
-                write_pr_outputs "Automatic merge of upstream release ${TAG} succeeded, but pushing directly to ${DOWNSTREAM_BRANCH} failed."
+              restore_preserved_paths HEAD
+              remaining_conflicts="$(git diff --name-only --diff-filter=U)"
+              if [ -z "${remaining_conflicts}" ]; then
+                commit_sync
+              else
+                conflict_files="$(echo "${remaining_conflicts}" | sed 's/^/- /')"
+                git reset --hard
+                git checkout -B "${sync_branch}" "${upstream_commit}"
+                restore_preserved_paths "origin/${DOWNSTREAM_BRANCH}"
+                git commit --allow-empty \
+                  -m "Keep downstream-only paths for ${TAG}" \
+                  -m "Upstream commit: ${upstream_commit}" \
+                  -m "Merge conflicts outside downstream-only paths must be resolved in the pull request."
+                git push origin "HEAD:refs/heads/${sync_branch}" --force
+                write_pr_outputs "Automatic merge of upstream release ${TAG} into ${DOWNSTREAM_BRANCH} had conflicts outside downstream-only paths. Resolve these files in the PR before merging." "${conflict_files}"
                 exit 0
               fi
+            else
+              restore_preserved_paths HEAD
+              commit_sync
+            fi
+
+            if ! git push origin "HEAD:refs/heads/${DOWNSTREAM_BRANCH}"; then
+              push_pr_branch
+              write_pr_outputs "Automatic merge of upstream release ${TAG} succeeded, but pushing directly to ${DOWNSTREAM_BRANCH} failed."
+              exit 0
             fi
           fi
 
