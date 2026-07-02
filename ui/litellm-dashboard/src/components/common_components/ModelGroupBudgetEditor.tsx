@@ -10,6 +10,8 @@ const { Text } = Typography;
 export interface ModelGroupBudgetConfig {
   max_budget?: number;
   budget_duration?: string;
+  tpm_limit?: number;
+  rpm_limit?: number;
 }
 
 /** Map of access_group_id -> budget config. */
@@ -19,6 +21,8 @@ interface EditorRow {
   groupId?: string;
   max_budget?: number;
   budget_duration?: string;
+  tpm_limit?: number;
+  rpm_limit?: number;
 }
 
 interface ModelGroupBudgetEditorProps {
@@ -26,12 +30,16 @@ interface ModelGroupBudgetEditorProps {
   onChange?: (value: ModelGroupBudgetValue) => void;
 }
 
+const isSet = (n?: number): n is number => n !== undefined && n !== null;
+
 const rowsToValue = (rows: EditorRow[]): ModelGroupBudgetValue =>
   rows.reduce<ModelGroupBudgetValue>((acc, row) => {
-    if (row.groupId && row.max_budget !== undefined && row.max_budget !== null) {
+    if (row.groupId && (isSet(row.max_budget) || isSet(row.tpm_limit) || isSet(row.rpm_limit))) {
       acc[row.groupId] = {
-        max_budget: row.max_budget,
+        ...(isSet(row.max_budget) ? { max_budget: row.max_budget } : {}),
         ...(row.budget_duration ? { budget_duration: row.budget_duration } : {}),
+        ...(isSet(row.tpm_limit) ? { tpm_limit: row.tpm_limit } : {}),
+        ...(isSet(row.rpm_limit) ? { rpm_limit: row.rpm_limit } : {}),
       };
     }
     return acc;
@@ -42,14 +50,17 @@ const valueToRows = (value?: ModelGroupBudgetValue): EditorRow[] =>
     groupId,
     max_budget: cfg?.max_budget,
     budget_duration: cfg?.budget_duration,
+    tpm_limit: cfg?.tpm_limit,
+    rpm_limit: cfg?.rpm_limit,
   }));
 
 /**
- * Editor for per-access-group dollar budgets.
+ * Editor for per-access-group dollar budgets and TPM/RPM limits.
  *
- * - Each row binds one access group (by access_group_id) to a max budget + reset window.
- * - Emits a `{ access_group_id: { max_budget, budget_duration } }` object via onChange,
- *   so it drops directly into an Ant Design `<Form.Item>`.
+ * - Each row binds one access group (by access_group_id) to a max budget + reset window
+ *   and/or a TPM/RPM rate limit.
+ * - Emits a `{ access_group_id: { max_budget, budget_duration, tpm_limit, rpm_limit } }`
+ *   object via onChange, so it drops directly into an Ant Design `<Form.Item>`.
  */
 const ModelGroupBudgetEditor: React.FC<ModelGroupBudgetEditorProps> = ({ value, onChange }) => {
   const { data: accessGroups, isLoading } = useAccessGroups();
@@ -117,6 +128,28 @@ const ModelGroupBudgetEditor: React.FC<ModelGroupBudgetEditorProps> = ({ value, 
           <DurationSelect
             value={row.budget_duration}
             onChange={(budget_duration) => updateRow(index, { budget_duration })}
+          />
+          <NumericalInput
+            step={1}
+            min={0}
+            placeholder="TPM limit"
+            style={{ width: 130 }}
+            value={row.tpm_limit}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+              const raw = e.target.value;
+              updateRow(index, { tpm_limit: raw === "" ? undefined : Number(raw) });
+            }}
+          />
+          <NumericalInput
+            step={1}
+            min={0}
+            placeholder="RPM limit"
+            style={{ width: 130 }}
+            value={row.rpm_limit}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+              const raw = e.target.value;
+              updateRow(index, { rpm_limit: raw === "" ? undefined : Number(raw) });
+            }}
           />
           <Button
             type="text"
