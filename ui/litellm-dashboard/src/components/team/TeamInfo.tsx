@@ -134,7 +134,10 @@ export interface TeamData {
       budget_duration: string;
       tpm_limit: number | null;
       rpm_limit: number | null;
-      model_group_max_budget?: Record<string, { max_budget?: number; budget_duration?: string }> | null;
+      model_group_max_budget?: Record<
+        string,
+        { max_budget?: number; budget_duration?: string; tpm_limit?: number; rpm_limit?: number }
+      > | null;
     } | null;
   };
   keys: any[];

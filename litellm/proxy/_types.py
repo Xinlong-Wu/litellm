@@ -3378,6 +3378,10 @@ class ProxyErrorTypes(str, enum.Enum):
     """
     Object was over budget
     """
+    rate_limit_error = "rate_limit_error"
+    """
+    Object was over its TPM/RPM rate limit
+    """
     no_db_connection = "no_db_connection"
     """
     No database connection

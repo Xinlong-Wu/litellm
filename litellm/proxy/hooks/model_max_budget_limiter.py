@@ -1,9 +1,11 @@
 import json
+from datetime import datetime
 from typing import List, Optional
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.exceptions import RateLimitErrorCategory, RateLimitType
 from litellm.integrations.custom_logger import Span
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
@@ -18,6 +20,8 @@ VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX = "virtual_key_spend"
 END_USER_SPEND_CACHE_KEY_PREFIX = "end_user_model_spend"
 USER_GROUP_SPEND_CACHE_KEY_PREFIX = "user_model_group_spend"
 TEAM_MEMBER_GROUP_SPEND_CACHE_KEY_PREFIX = "team_member_model_group_spend"
+USER_GROUP_RATE_CACHE_KEY_PREFIX = "user_model_group_rate"
+TEAM_MEMBER_GROUP_RATE_CACHE_KEY_PREFIX = "team_member_model_group_rate"
 
 
 class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
@@ -150,10 +154,18 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     ) -> bool:
         """Check the user's aggregate spend (across all their keys) for each model group.
 
-        Raises BudgetExceededError if any matching group is over budget.
+        Raises BudgetExceededError if any matching group is over budget, or
+        RateLimitError if any matching group is over its TPM/RPM limit.
         """
-        return await self._is_within_model_group_budget(
+        await self._is_within_model_group_budget(
             scope_prefix=USER_GROUP_SPEND_CACHE_KEY_PREFIX,
+            scope_id=user_id,
+            model_group_max_budget=user_model_group_max_budget,
+            groups=groups,
+            error_prefix=f"LiteLLM User={user_id}",
+        )
+        return await self._is_within_model_group_rate_limit(
+            scope_prefix=USER_GROUP_RATE_CACHE_KEY_PREFIX,
             scope_id=user_id,
             model_group_max_budget=user_model_group_max_budget,
             groups=groups,
@@ -169,10 +181,18 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     ) -> bool:
         """Check a team member's per-group spend within their team.
 
-        Raises BudgetExceededError if any matching group is over budget.
+        Raises BudgetExceededError if any matching group is over budget, or
+        RateLimitError if any matching group is over its TPM/RPM limit.
         """
-        return await self._is_within_model_group_budget(
+        await self._is_within_model_group_budget(
             scope_prefix=TEAM_MEMBER_GROUP_SPEND_CACHE_KEY_PREFIX,
+            scope_id=f"{user_id}:{team_id}",
+            model_group_max_budget=team_member_model_group_max_budget,
+            groups=groups,
+            error_prefix=f"LiteLLM User={user_id} in Team={team_id}",
+        )
+        return await self._is_within_model_group_rate_limit(
+            scope_prefix=TEAM_MEMBER_GROUP_RATE_CACHE_KEY_PREFIX,
             scope_id=f"{user_id}:{team_id}",
             model_group_max_budget=team_member_model_group_max_budget,
             groups=groups,
@@ -242,6 +262,88 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                 start_time_key=start_time_key,
                 response_cost=response_cost,
             )
+
+    @staticmethod
+    def _current_minute() -> str:
+        return datetime.now().strftime("%Y-%m-%d-%H-%M")
+
+    @staticmethod
+    def _group_rate_config(
+        model_group_max_budget: dict, group: str
+    ) -> Optional[BudgetConfig]:
+        budget_info = model_group_max_budget.get(group)
+        if budget_info is None:
+            return None
+        rate_config = BudgetConfig(**budget_info)
+        has_tpm = rate_config.tpm_limit is not None and rate_config.tpm_limit > 0
+        has_rpm = rate_config.rpm_limit is not None and rate_config.rpm_limit > 0
+        if not has_tpm and not has_rpm:
+            return None
+        return rate_config
+
+    async def _is_within_model_group_rate_limit(
+        self,
+        *,
+        scope_prefix: str,
+        scope_id: str,
+        model_group_max_budget: dict,
+        groups: List[str],
+        error_prefix: str,
+    ) -> bool:
+        minute = self._current_minute()
+        for group in groups:
+            rate_config = self._group_rate_config(model_group_max_budget, group)
+            if rate_config is None:
+                continue
+            tpm_key = f"{scope_prefix}_tpm:{scope_id}:{group}:{minute}"
+            rpm_key = f"{scope_prefix}_rpm:{scope_id}:{group}:{minute}"
+            current_tpm = await self.dual_cache.async_get_cache(key=tpm_key) or 0
+            current_rpm = await self.dual_cache.async_get_cache(key=rpm_key) or 0
+            if (
+                rate_config.rpm_limit is not None
+                and current_rpm >= rate_config.rpm_limit
+            ):
+                raise litellm.RateLimitError(
+                    message=f"{error_prefix}, exceeded RPM limit for model group={group}. current rpm: {current_rpm}, rpm limit: {rate_config.rpm_limit}",
+                    llm_provider="litellm",
+                    model=group,
+                    category=RateLimitErrorCategory.LITELLM_RATE_LIMIT,
+                    rate_limit_type=RateLimitType.REQUESTS,
+                )
+            if (
+                rate_config.tpm_limit is not None
+                and current_tpm >= rate_config.tpm_limit
+            ):
+                raise litellm.RateLimitError(
+                    message=f"{error_prefix}, exceeded TPM limit for model group={group}. current tpm: {current_tpm}, tpm limit: {rate_config.tpm_limit}",
+                    llm_provider="litellm",
+                    model=group,
+                    category=RateLimitErrorCategory.LITELLM_RATE_LIMIT,
+                    rate_limit_type=RateLimitType.TOKENS,
+                )
+        return True
+
+    async def _increment_model_group_rate(
+        self,
+        *,
+        scope_prefix: str,
+        scope_id: str,
+        model_group_max_budget: dict,
+        groups: List[str],
+        total_tokens: int,
+    ) -> None:
+        minute = self._current_minute()
+        for group in groups:
+            rate_config = self._group_rate_config(model_group_max_budget, group)
+            if rate_config is None:
+                continue
+            rpm_key = f"{scope_prefix}_rpm:{scope_id}:{group}:{minute}"
+            tpm_key = f"{scope_prefix}_tpm:{scope_id}:{group}:{minute}"
+            await self.dual_cache.async_increment_cache(key=rpm_key, value=1, ttl=60)
+            if total_tokens:
+                await self.dual_cache.async_increment_cache(
+                    key=tpm_key, value=total_tokens, ttl=60
+                )
 
     async def _get_end_user_spend_for_model(
         self,
@@ -442,6 +544,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             sl_metadata: dict = standard_logging_payload.get("metadata", {}) or {}
             user_id = sl_metadata.get("user_api_key_user_id")
             team_id = sl_metadata.get("user_api_key_team_id")
+            total_tokens: int = standard_logging_payload.get("total_tokens", 0) or 0
 
             if user_id and user_model_group_max_budget:
                 user_groups = await get_budgeted_groups_for_model(
@@ -460,6 +563,13 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                         groups=user_groups,
                         response_cost=response_cost,
                     )
+                    await self._increment_model_group_rate(
+                        scope_prefix=USER_GROUP_RATE_CACHE_KEY_PREFIX,
+                        scope_id=user_id,
+                        model_group_max_budget=user_model_group_max_budget,
+                        groups=user_groups,
+                        total_tokens=total_tokens,
+                    )
 
             if user_id and team_id and team_member_model_group_max_budget:
                 team_groups = await get_budgeted_groups_for_model(
@@ -477,6 +587,13 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                         model_group_max_budget=team_member_model_group_max_budget,
                         groups=team_groups,
                         response_cost=response_cost,
+                    )
+                    await self._increment_model_group_rate(
+                        scope_prefix=TEAM_MEMBER_GROUP_RATE_CACHE_KEY_PREFIX,
+                        scope_id=f"{user_id}:{team_id}",
+                        model_group_max_budget=team_member_model_group_max_budget,
+                        groups=team_groups,
+                        total_tokens=total_tokens,
                     )
 
         if self.dual_cache.redis_cache is not None:

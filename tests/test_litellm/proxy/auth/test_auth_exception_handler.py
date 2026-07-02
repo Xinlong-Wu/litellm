@@ -304,6 +304,31 @@ async def test_handle_authentication_error_budget_exceeded():
 
 
 @pytest.mark.asyncio
+async def test_handle_authentication_error_rate_limit():
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    with pytest.raises(ProxyException) as exc_info:
+        from litellm.exceptions import RateLimitError
+
+        rate_error = RateLimitError(
+            message="exceeded RPM limit for model group=premium",
+            llm_provider="litellm",
+            model="premium",
+        )
+        await handler._handle_authentication_error(
+            rate_error,
+            MagicMock(),
+            {},
+            "/test",
+            None,
+            "test-key",
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.rate_limit_error
+    assert int(exc_info.value.code) == status.HTTP_429_TOO_MANY_REQUESTS
+
+
+@pytest.mark.asyncio
 async def test_route_passed_to_post_call_failure_hook():
     """
     This route is used by proxy track_cost_callback's async_post_call_failure_hook to check if the route is an LLM route

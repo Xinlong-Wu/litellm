@@ -49,6 +49,43 @@ describe("ModelGroupBudgetEditor", () => {
     expect(emitted["ag-2"].max_budget).toBe(12);
   });
 
+  it("emits tpm_limit and rpm_limit alongside the budget", async () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByText("Add model group budget"));
+
+    const groupSelect = screen.getAllByRole("combobox")[0];
+    fireEvent.mouseDown(groupSelect);
+    fireEvent.click(await screen.findByText("Premium"));
+
+    fireEvent.change(screen.getByPlaceholderText("Max budget (USD)"), { target: { value: "12" } });
+    fireEvent.change(screen.getByPlaceholderText("TPM limit"), { target: { value: "1000" } });
+    fireEvent.change(screen.getByPlaceholderText("RPM limit"), { target: { value: "20" } });
+
+    const emitted = JSON.parse(screen.getByTestId("emitted").textContent || "{}");
+    expect(emitted["ag-1"]).toEqual({ max_budget: 12, tpm_limit: 1000, rpm_limit: 20 });
+  });
+
+  it("emits a rate-only row that has no budget", async () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByText("Add model group budget"));
+
+    const groupSelect = screen.getAllByRole("combobox")[0];
+    fireEvent.mouseDown(groupSelect);
+    fireEvent.click(await screen.findByText("Cheap"));
+
+    fireEvent.change(screen.getByPlaceholderText("RPM limit"), { target: { value: "5" } });
+
+    const emitted = JSON.parse(screen.getByTestId("emitted").textContent || "{}");
+    expect(emitted["ag-2"]).toEqual({ rpm_limit: 5 });
+    expect(emitted["ag-2"].max_budget).toBeUndefined();
+  });
+
+  it("seeds tpm_limit and rpm_limit from an existing value", () => {
+    render(<Harness initial={{ "ag-1": { max_budget: 50, tpm_limit: 800, rpm_limit: 10 } }} />);
+    expect((screen.getByPlaceholderText("TPM limit") as HTMLInputElement).value).toBe("800");
+    expect((screen.getByPlaceholderText("RPM limit") as HTMLInputElement).value).toBe("10");
+  });
+
   it("removes a row and drops it from the emitted value", () => {
     render(<Harness initial={{ "ag-1": { max_budget: 50, budget_duration: "30d" } }} />);
     // the delete button is the only icon button in the row
