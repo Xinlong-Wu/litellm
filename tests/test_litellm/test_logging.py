@@ -328,3 +328,188 @@ async def test_cache_hit_includes_custom_llm_provider():
         # Clean up
         litellm.callbacks = original_callbacks
         litellm.cache = None
+
+
+# ---------------------------------------------------------------------------
+# File logging: write logs to a directory (daily rotation)
+# ---------------------------------------------------------------------------
+import glob
+import logging.handlers
+
+import litellm._logging as _logging_module
+from litellm._logging import (
+    add_file_logging,
+    resolve_uvicorn_log_file,
+    _get_uvicorn_log_config,
+    _lockfile_for,
+    _reattach_app_file_handler,
+    _SharedRotatingFileHandler,
+)
+
+_FILE_LOG_LOGGERS = [verbose_logger, verbose_router_logger, verbose_proxy_logger]
+
+
+@pytest.fixture
+def clean_file_logging(monkeypatch):
+    """Detach any litellm-managed file handler and clear log env after the test."""
+    for var in ("LITELLM_LOG_DIR", "LITELLM_LOG_FILE", "LITELLM_LOG_RETENTION_DAYS"):
+        monkeypatch.delenv(var, raising=False)
+    yield
+    handler = _logging_module._app_file_handler
+    if handler is not None:
+        for lg in _FILE_LOG_LOGGERS:
+            if handler in lg.handlers:
+                lg.removeHandler(handler)
+        handler.close()
+    _logging_module._app_file_handler = None
+
+
+def test_add_file_logging_writes_marker_to_explicit_path(tmp_path, clean_file_logging):
+    log_file = tmp_path / "litellm.log"
+    resolved = add_file_logging(str(log_file))
+
+    assert resolved == str(log_file)
+    verbose_proxy_logger.error("hello-file-marker-123")
+
+    assert log_file.exists()
+    assert "hello-file-marker-123" in log_file.read_text()
+
+
+def test_log_dir_env_resolves_default_filename(
+    tmp_path, clean_file_logging, monkeypatch
+):
+    monkeypatch.setenv("LITELLM_LOG_DIR", str(tmp_path))
+    resolved = add_file_logging()
+
+    assert resolved == str(tmp_path / "litellm.log")
+    verbose_logger.error("dir-marker")
+    assert (tmp_path / "litellm.log").exists()
+    assert "dir-marker" in (tmp_path / "litellm.log").read_text()
+
+
+def test_add_file_logging_is_idempotent(tmp_path, clean_file_logging):
+    log_file = str(tmp_path / "litellm.log")
+    add_file_logging(log_file)
+    add_file_logging(log_file)
+
+    for lg in _FILE_LOG_LOGGERS:
+        file_handlers = [
+            h for h in lg.handlers if isinstance(h, _SharedRotatingFileHandler)
+        ]
+        assert len(file_handlers) == 1
+
+
+def test_add_file_logging_no_op_without_config(clean_file_logging):
+    assert add_file_logging() is None
+    assert _logging_module._app_file_handler is None
+
+
+def test_file_handler_is_daily_rotating_with_retention(
+    tmp_path, clean_file_logging, monkeypatch
+):
+    monkeypatch.setenv("LITELLM_LOG_RETENTION_DAYS", "7")
+    add_file_logging(str(tmp_path / "litellm.log"))
+
+    handler = _logging_module._app_file_handler
+    assert isinstance(handler, _SharedRotatingFileHandler)
+    assert handler.when == "MIDNIGHT"
+    assert handler.backupCount == 7
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="flock is POSIX-only")
+def test_rollover_is_mutually_exclusive_across_holders(tmp_path, clean_file_logging):
+    """While another holder owns the lock, _maybe_rollover must not rotate; once
+    released, exactly one dated file is produced."""
+    import fcntl
+
+    log_file = tmp_path / "litellm.log"
+    handler = add_file_logging(str(log_file)) and _logging_module._app_file_handler
+    verbose_proxy_logger.error("before-rotate")
+
+    def dated_files():
+        return [
+            p for p in glob.glob(str(log_file) + ".*") if not p.endswith(".rotate.lock")
+        ]
+
+    # Hold the rotation lock from an independent fd -> handler cannot rotate.
+    lock_fd = os.open(_lockfile_for(str(log_file)), os.O_CREAT | os.O_RDWR, 0o644)
+    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    handler._maybe_rollover()
+    assert dated_files() == []  # contended -> skipped
+    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    os.close(lock_fd)
+
+    # Now it wins the lock and rotates exactly once.
+    handler._maybe_rollover()
+    dated = dated_files()
+    assert len(dated) == 1
+    assert "before-rotate" in open(dated[0]).read()
+
+
+def test_follower_reopens_new_base_after_rotation(tmp_path, clean_file_logging):
+    """After rotation the base file is recreated on the next emit and old lines
+    are not carried over."""
+    log_file = tmp_path / "litellm.log"
+    handler = add_file_logging(str(log_file)) and _logging_module._app_file_handler
+    verbose_proxy_logger.error("old-line")
+
+    handler._maybe_rollover()  # renames base -> dated (delay=True: base absent until next write)
+    verbose_proxy_logger.error("new-line")
+
+    assert log_file.exists()
+    content = log_file.read_text()
+    assert "new-line" in content
+    assert "old-line" not in content
+
+
+def test_file_log_is_redacted_and_has_no_ansi(tmp_path, clean_file_logging):
+    log_file = tmp_path / "litellm.log"
+    add_file_logging(str(log_file))
+
+    verbose_proxy_logger.error("leaking sk-1234567890abcdefghij please")
+    content = log_file.read_text()
+
+    assert "sk-1234567890abcdefghij" not in content  # secret redaction filter ran
+    assert "\033[" not in content  # no color escape codes in the file
+
+
+def test_file_log_json_mode_writes_valid_json(tmp_path, clean_file_logging):
+    log_file = tmp_path / "litellm.log"
+    add_file_logging(str(log_file), use_json=True)
+
+    verbose_proxy_logger.error("json-line-marker")
+    lines = [l for l in log_file.read_text().splitlines() if "json-line-marker" in l]
+    assert lines, "expected a json-formatted line containing the marker"
+    parsed = json.loads(lines[-1])
+    assert parsed["message"] == "json-line-marker"
+    assert parsed["level"] == "ERROR"
+
+
+def test_reattach_uses_json_formatter(tmp_path, clean_file_logging, monkeypatch):
+    monkeypatch.setenv("LITELLM_LOG_DIR", str(tmp_path))
+    add_file_logging()  # text formatter initially
+    _reattach_app_file_handler(use_json=True)
+
+    handler = _logging_module._app_file_handler
+    assert isinstance(handler.formatter, JsonFormatter)
+
+
+def test_uvicorn_log_config_adds_file_handler_when_dir_set(
+    tmp_path, clean_file_logging, monkeypatch
+):
+    monkeypatch.setenv("LITELLM_LOG_DIR", str(tmp_path))
+    assert resolve_uvicorn_log_file() == str(tmp_path / "uvicorn.log")
+
+    cfg = _get_uvicorn_log_config(use_json=False)
+    file_handler = cfg["handlers"]["file"]
+    assert file_handler["()"] == "litellm._logging._SharedRotatingFileHandler"
+    assert file_handler["filename"] == str(tmp_path / "uvicorn.log")
+    # the single shared file handler is attached to all uvicorn loggers
+    assert "file" in cfg["loggers"]["uvicorn.access"]["handlers"]
+    assert "file" in cfg["loggers"]["uvicorn.error"]["handlers"]
+
+
+def test_uvicorn_log_config_no_file_handlers_without_dir(clean_file_logging):
+    cfg = _get_uvicorn_log_config(use_json=True)
+    assert "file" not in cfg["handlers"]
+    assert cfg["loggers"]["uvicorn.access"]["handlers"] == ["access"]

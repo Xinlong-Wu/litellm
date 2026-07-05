@@ -21,12 +21,20 @@ def reload_huggingface_modules():
     Reload modules to ensure fresh references after conftest reloads litellm.
     This ensures the HTTPHandler class being patched is the same one used by
     the embedding handler during parallel test execution.
+
+    The conftest only reloads litellm in single-process mode (module reload
+    under xdist corrupts class identity across the worker). Reloading
+    http_handler here under xdist swaps HTTPHandler / MaskedHTTPStatusError for
+    new class objects mid-run, so sibling custom_httpx tests on the same worker
+    that already imported the originals fail isinstance / pytest.raises. Mirror
+    the conftest guard: only reload when not running in parallel.
     """
     import litellm.llms.custom_httpx.http_handler as http_handler_module
     import litellm.llms.huggingface.embedding.handler as hf_embedding_handler_module
 
-    importlib.reload(http_handler_module)
-    importlib.reload(hf_embedding_handler_module)
+    if os.environ.get("PYTEST_XDIST_WORKER") is None:
+        importlib.reload(http_handler_module)
+        importlib.reload(hf_embedding_handler_module)
     yield
 
 

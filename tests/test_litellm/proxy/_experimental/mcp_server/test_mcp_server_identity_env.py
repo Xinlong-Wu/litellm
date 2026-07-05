@@ -24,6 +24,17 @@ MGMT_MODULE = "litellm.proxy.management_endpoints.mcp_management_endpoints"
 def _env_and_reload(**env):
     saved = {key: os.environ.get(key) for key in env}
 
+    # Snapshot the modules' attributes so they can be restored to their ORIGINAL
+    # class objects afterwards. Reloading to "undo" would mint brand-new classes
+    # (e.g. MCPMissingUserEnvVarsError) that diverge from the references frozen
+    # at import time by consumers such as mcp_server_manager, which then raises a
+    # class that sibling tests' ``pytest.raises`` (resolving the current one) no
+    # longer match — a cross-test failure on the same xdist worker.
+    utils_module = importlib.import_module(UTILS_MODULE)
+    mgmt_module = importlib.import_module(MGMT_MODULE)
+    saved_utils = dict(utils_module.__dict__)
+    saved_mgmt = dict(mgmt_module.__dict__)
+
     def _apply_env(values):
         for key, value in values.items():
             if value is None:
@@ -31,17 +42,19 @@ def _env_and_reload(**env):
             else:
                 os.environ[key] = value
 
-    def _reload():
-        utils = importlib.reload(importlib.import_module(UTILS_MODULE))
-        mgmt = importlib.reload(importlib.import_module(MGMT_MODULE))
-        return utils, mgmt
+    def _restore_module(module, snapshot):
+        module.__dict__.clear()
+        module.__dict__.update(snapshot)
 
     try:
         _apply_env(env)
-        yield _reload()
+        utils = importlib.reload(utils_module)
+        mgmt = importlib.reload(mgmt_module)
+        yield utils, mgmt
     finally:
         _apply_env(saved)
-        _reload()
+        _restore_module(utils_module, saved_utils)
+        _restore_module(mgmt_module, saved_mgmt)
 
 
 def test_defaults_used_when_env_unset():

@@ -1,8 +1,8 @@
 # Base image for building
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:3258be472764337fd13095bcbb3182da170243b5819fd67ad4c0754590588b31
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:c61ac6919b811ea53c4782d69f1fe05218ba3c25d53f01b6ab7892e621bd4370
 
 # Runtime image
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:3258be472764337fd13095bcbb3182da170243b5819fd67ad4c0754590588b31
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:c61ac6919b811ea53c4782d69f1fe05218ba3c25d53f01b6ab7892e621bd4370
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a
 
 FROM $UV_IMAGE AS uvbin
@@ -46,8 +46,14 @@ RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-gr
 # Copy full source tree
 COPY . .
 
-# Build Admin UI before final sync
-RUN sed -i 's/\r$//' docker/build_admin_ui.sh && chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
+RUN test -f litellm/proxy/_experimental/out/index.html && \
+    test -d litellm/proxy/_experimental/out/_next || \
+    (echo "Admin UI assets missing. Run ./docker/build_admin_ui.sh before docker build." >&2; exit 1)
+
+RUN mkdir -p /var/lib/litellm/ui /var/lib/litellm/assets && \
+    cp -r /app/litellm/proxy/_experimental/out/. /var/lib/litellm/ui/ && \
+    cp /app/litellm/proxy/logo.jpg /var/lib/litellm/assets/logo.jpg && \
+    touch /var/lib/litellm/ui/.litellm_ui_ready
 
 # Install project and workspace packages (fast - deps already cached)
 RUN uv sync --frozen --no-default-groups --no-editable \
@@ -70,7 +76,9 @@ USER root
 RUN apk add --no-cache bash openssl tzdata nodejs python3 libsndfile
 
 WORKDIR /app
-ENV PATH="/app/.venv/bin:${PATH}"
+ENV PATH="/app/.venv/bin:${PATH}" \
+    LITELLM_UI_PATH=/var/lib/litellm/ui \
+    LITELLM_ASSETS_PATH=/var/lib/litellm/assets
 
 # Copy only what runtime needs. The application is installed inside the venv;
 # the rest of the builder's /app is source and build metadata that must not
@@ -84,6 +92,8 @@ COPY --from=builder /app/litellm/proxy/prisma_migration.py /app/litellm/proxy/pr
 # working directory on sys.path; litellm/proxy/hooks resolves
 # enterprise.enterprise_hooks from it)
 COPY --from=builder /app/enterprise /app/enterprise
+COPY --from=builder /var/lib/litellm/ui /var/lib/litellm/ui
+COPY --from=builder /var/lib/litellm/assets /var/lib/litellm/assets
 # Prisma binaries live in $HOME/.cache (default prisma-python location),
 # which is /root/.cache here. Copy them from the builder so they survive
 # deployments that volume-mount /app/.cache (e.g. readOnlyRootFilesystem
