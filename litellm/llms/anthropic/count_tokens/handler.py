@@ -68,8 +68,9 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
 
             verbose_logger.debug(f"Transformed request: {request_body}")
 
-            # Get endpoint URL
-            endpoint_url = api_base or self.get_anthropic_count_tokens_endpoint()
+            # Get endpoint URL (normalizes a bare api_base to the count_tokens path,
+            # falls back to env var, then Anthropic's public endpoint)
+            endpoint_url = self.get_anthropic_count_tokens_endpoint(api_base)
 
             verbose_logger.debug(f"Making request to: {endpoint_url}")
 
