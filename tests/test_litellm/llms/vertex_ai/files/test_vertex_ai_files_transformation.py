@@ -1311,10 +1311,10 @@ class TestConfiguredBucketNameResolution:
 
     def test_legacy_kwarg_survives_get_litellm_params(self):
         from litellm.litellm_core_utils.get_litellm_params import (
-            _OPTIONAL_KWARGS_KEYS,
+            OPTIONAL_KWARGS_KEYS,
             get_litellm_params,
         )
 
-        assert "bucket_name" in _OPTIONAL_KWARGS_KEYS
+        assert "bucket_name" in OPTIONAL_KWARGS_KEYS
         params = get_litellm_params(bucket_name="my-legacy-bucket")
         assert params.get("bucket_name") == "my-legacy-bucket"

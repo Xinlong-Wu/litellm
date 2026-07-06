@@ -540,6 +540,8 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             # Managed files require bypassing the HTTP endpoint (which runs access-check hooks)
             # and calling the managed files hook directly with the user's credentials.
             is_managed_file = _is_base64_encoded_unified_file_id(file_id)
+            # For managed files the unified file id encodes the proxy model
+            # alias(es) the file was uploaded for; auth validates against those.
             target_model_names = (
                 get_models_from_unified_file_id(is_managed_file)
                 if is_managed_file
@@ -649,8 +651,9 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         """Reject the batch if the caller is not authorized for the upload target.
 
         For managed files, ``target_model_names`` (from the unified file id) is
-        the proxy alias the file was uploaded for and is used directly for auth.
-        For legacy/non-managed files, falls back to ``body.model`` values in the JSONL.
+        the proxy alias the file was uploaded for and is checked directly.
+        Otherwise the ``body.model`` values collected from the JSONL (``models``)
+        are checked.
 
         Reuses standard auth helpers so the same model access rules the proxy
         enforces on `/chat/completions` apply here.
