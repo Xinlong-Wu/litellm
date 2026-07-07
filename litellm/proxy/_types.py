@@ -1153,6 +1153,7 @@ class GenerateKeyResponse(KeyRequestBase):
             "config",
             "permissions",
             "model_max_budget",
+            "model_group_max_budget",
             "router_settings",
             "budget_limits",
         ]
