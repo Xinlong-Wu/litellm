@@ -8,9 +8,7 @@ import tempfile
 from dotenv import load_dotenv
 
 load_dotenv()
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system-path
 
 import logging
 import time
@@ -128,9 +126,9 @@ async def test_create_batch(provider, tmp_path):
     print("Response from creating file=", file_obj)
 
     batch_input_file_id = file_obj.id
-    assert (
-        batch_input_file_id is not None
-    ), "Failed to create file, expected a non null file_id but got {batch_input_file_id}"
+    assert batch_input_file_id is not None, (
+        "Failed to create file, expected a non null file_id but got {batch_input_file_id}"
+    )
 
     await asyncio.sleep(1)
     create_batch_response = await litellm.acreate_batch(
@@ -144,20 +142,18 @@ async def test_create_batch(provider, tmp_path):
     print("response from litellm.create_batch=", create_batch_response)
     await asyncio.sleep(6)
 
-    assert (
-        create_batch_response.id is not None
-    ), f"Failed to create batch, expected a non null batch_id but got {create_batch_response.id}"
+    assert create_batch_response.id is not None, (
+        f"Failed to create batch, expected a non null batch_id but got {create_batch_response.id}"
+    )
     assert (
         create_batch_response.endpoint == "/v1/chat/completions"
         or create_batch_response.endpoint == "/chat/completions"
     ), f"Failed to create batch, expected endpoint to be /v1/chat/completions but got {create_batch_response.endpoint}"
-    assert (
-        create_batch_response.input_file_id == batch_input_file_id
-    ), f"Failed to create batch, expected input_file_id to be {batch_input_file_id} but got {create_batch_response.input_file_id}"
-
-    retrieved_batch = await litellm.aretrieve_batch(
-        batch_id=create_batch_response.id, custom_llm_provider=provider
+    assert create_batch_response.input_file_id == batch_input_file_id, (
+        f"Failed to create batch, expected input_file_id to be {batch_input_file_id} but got {create_batch_response.input_file_id}"
     )
+
+    retrieved_batch = await litellm.aretrieve_batch(batch_id=create_batch_response.id, custom_llm_provider=provider)
     print("retrieved batch=", retrieved_batch)
     # just assert that we retrieved a non None batch
 
@@ -167,9 +163,7 @@ async def test_create_batch(provider, tmp_path):
     list_batches = await litellm.alist_batches(custom_llm_provider=provider, limit=2)
     print("list_batches=", list_batches)
 
-    file_content = await litellm.afile_content(
-        file_id=batch_input_file_id, custom_llm_provider=provider
-    )
+    file_content = await litellm.afile_content(file_id=batch_input_file_id, custom_llm_provider=provider)
 
     result = file_content.content
 
@@ -302,9 +296,9 @@ async def test_async_create_batch(provider, tmp_path):
 
     await asyncio.sleep(10)
     batch_input_file_id = file_obj.id
-    assert (
-        batch_input_file_id is not None
-    ), "Failed to create file, expected a non null file_id but got {batch_input_file_id}"
+    assert batch_input_file_id is not None, (
+        "Failed to create file, expected a non null file_id but got {batch_input_file_id}"
+    )
 
     extra_metadata_field = {
         "user_api_key_alias": "special_api_key_alias",
@@ -324,16 +318,16 @@ async def test_async_create_batch(provider, tmp_path):
 
     print("response from litellm.create_batch=", create_batch_response)
 
-    assert (
-        create_batch_response.id is not None
-    ), f"Failed to create batch, expected a non null batch_id but got {create_batch_response.id}"
+    assert create_batch_response.id is not None, (
+        f"Failed to create batch, expected a non null batch_id but got {create_batch_response.id}"
+    )
     assert (
         create_batch_response.endpoint == "/v1/chat/completions"
         or create_batch_response.endpoint == "/chat/completions"
     ), f"Failed to create batch, expected endpoint to be /v1/chat/completions but got {create_batch_response.endpoint}"
-    assert (
-        create_batch_response.input_file_id == batch_input_file_id
-    ), f"Failed to create batch, expected input_file_id to be {batch_input_file_id} but got {create_batch_response.input_file_id}"
+    assert create_batch_response.input_file_id == batch_input_file_id, (
+        f"Failed to create batch, expected input_file_id to be {batch_input_file_id} but got {create_batch_response.input_file_id}"
+    )
 
     # Assert that the create batch event is logged on CustomLogger
     standard_logging_object = await _wait_for_standard_logging_object(custom_logger)
@@ -341,18 +335,13 @@ async def test_async_create_batch(provider, tmp_path):
         "standard_logging_object=",
         json.dumps(standard_logging_object, indent=4, default=str),
     )
-    assert (
-        standard_logging_object["metadata"]["user_api_key_alias"]
-        == extra_metadata_field["user_api_key_alias"]
-    )
+    assert standard_logging_object["metadata"]["user_api_key_alias"] == extra_metadata_field["user_api_key_alias"]
     assert (
         standard_logging_object["metadata"]["user_api_key_team_alias"]
         == extra_metadata_field["user_api_key_team_alias"]
     )
 
-    retrieved_batch = await litellm.aretrieve_batch(
-        batch_id=create_batch_response.id, custom_llm_provider=provider
-    )
+    retrieved_batch = await litellm.aretrieve_batch(batch_id=create_batch_response.id, custom_llm_provider=provider)
     print("retrieved batch=", retrieved_batch)
     # just assert that we retrieved a non None batch
 
@@ -364,23 +353,17 @@ async def test_async_create_batch(provider, tmp_path):
 
     # try to get file content for our original file
 
-    file_content = await litellm.afile_content(
-        file_id=batch_input_file_id, custom_llm_provider=provider
-    )
+    file_content = await litellm.afile_content(file_id=batch_input_file_id, custom_llm_provider=provider)
 
     print("file content = ", file_content)
 
     # file obj
-    file_obj = await litellm.afile_retrieve(
-        file_id=batch_input_file_id, custom_llm_provider=provider
-    )
+    file_obj = await litellm.afile_retrieve(file_id=batch_input_file_id, custom_llm_provider=provider)
     print("file obj = ", file_obj)
     assert file_obj.id == batch_input_file_id
 
     # delete file
-    delete_file_response = await litellm.afile_delete(
-        file_id=batch_input_file_id, custom_llm_provider=provider
-    )
+    delete_file_response = await litellm.afile_delete(file_id=batch_input_file_id, custom_llm_provider=provider)
 
     print("delete file response = ", delete_file_response)
 
@@ -448,9 +431,7 @@ mock_vertex_batch_response = {
             ]
         }
     },
-    "outputConfig": {
-        "gcsDestination": {"outputUriPrefix": "gs://litellm-local/batch-outputs/"}
-    },
+    "outputConfig": {"gcsDestination": {"outputUriPrefix": "gs://litellm-local/batch-outputs/"}},
     "dedicatedResources": {
         "machineSpec": {
             "machineType": "n1-standard-4",
@@ -513,25 +494,26 @@ async def test_avertex_batch_prediction(monkeypatch):
             mock_response.status_code = 200
         return mock_response
 
-    # Batch jsonl file creation now streams to a GCS resumable session via
-    # _aresumable_chunked_upload (httpx send), not AsyncHTTPHandler.post, so mock
-    # that entry point to return the GCS object response. The resumable protocol
-    # itself is covered in test_vertex_ai_files_streaming.py.
-    mock_upload_response = httpx.Response(
-        200,
-        json=mock_file_response,
-        request=httpx.Request("PUT", "https://storage.googleapis.com/upload"),
-    )
+    # Batch jsonl creation now stages the body to a temp file and issues a single
+    # uploadType=media POST against the raw httpx.AsyncClient (client.client) inside
+    # _astage_and_upload_media, not AsyncHTTPHandler.post. Patch that raw POST so the
+    # real staging/upload + response transform run while the GCS object response is
+    # mocked; AsyncHTTPHandler.post still handles the batch-prediction call.
     with (
         patch(
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
             side_effect=mock_side_effect,
-        ) as mock_global_post,
-        patch(
-            "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler._aresumable_chunked_upload",
-            new_callable=AsyncMock,
-            return_value=mock_upload_response,
         ),
+        patch.object(
+            httpx.AsyncClient,
+            "post",
+            new_callable=AsyncMock,
+            return_value=httpx.Response(
+                200,
+                json=mock_file_response,
+                request=httpx.Request("POST", "https://storage.googleapis.com/upload"),
+            ),
+        ) as mock_gcs_upload,
     ):
         litellm.set_verbose = True
         litellm._turn_on_debug()
@@ -552,6 +534,12 @@ async def test_avertex_batch_prediction(monkeypatch):
             == "gs://litellm-local/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/5f7b99ad-9203-4430-98bf-3b45451af4cb"
         )
 
+        mock_gcs_upload.assert_awaited_once()
+        upload_url = str(mock_gcs_upload.call_args.args[0])
+        assert "uploadType=media" in upload_url
+        assert "/b/litellm-local/o" in upload_url
+        assert mock_gcs_upload.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+
         # Create batch
         create_batch_response = await litellm.acreate_batch(
             completion_window="24h",
@@ -569,9 +557,7 @@ async def test_avertex_batch_prediction(monkeypatch):
         )
 
         # Mock the retrieve batch response
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get"
-        ) as mock_get:
+        with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get") as mock_get:
             mock_get_response = MagicMock()
             mock_get_response.json.return_value = mock_vertex_batch_response
             mock_get_response.status_code = 200
@@ -603,9 +589,7 @@ async def test_vertex_list_batches(monkeypatch):
         ),
     )
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get"
-    ) as mock_get:
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get") as mock_get:
         mock_get_response = MagicMock()
         mock_get_response.json.return_value = mock_vertex_list_response
         mock_get_response.status_code = 200
@@ -704,9 +688,7 @@ async def test_delete_batch_output_file():
     print("Batch created with ID=", create_batch_response.id)
 
     # Retrieve batch to get output_file_id
-    retrieved_batch = await litellm.aretrieve_batch(
-        batch_id=create_batch_response.id, custom_llm_provider="openai"
-    )
+    retrieved_batch = await litellm.aretrieve_batch(batch_id=create_batch_response.id, custom_llm_provider="openai")
     print("Retrieved batch=", retrieved_batch)
 
     # If batch has completed and has output file, test deleting it
@@ -721,19 +703,13 @@ async def test_delete_batch_output_file():
 
         print("Delete output file response=", delete_output_file_response)
         assert delete_output_file_response.id == retrieved_batch.output_file_id
-        assert delete_output_file_response.deleted is True or hasattr(
-            delete_output_file_response, "id"
-        )
+        assert delete_output_file_response.deleted is True or hasattr(delete_output_file_response, "id")
         print("✓ Successfully deleted batch output file")
     else:
-        print(
-            "⚠ Batch has not completed yet or no output file available, skipping output file deletion test"
-        )
+        print("⚠ Batch has not completed yet or no output file available, skipping output file deletion test")
 
     # Clean up - delete the input file
-    delete_input_file_response = await litellm.afile_delete(
-        file_id=batch_input_file_id, custom_llm_provider="openai"
-    )
+    delete_input_file_response = await litellm.afile_delete(file_id=batch_input_file_id, custom_llm_provider="openai")
     print("Delete input file response=", delete_input_file_response)
     assert delete_input_file_response.id == batch_input_file_id
     print("✓ Successfully deleted batch input file")
