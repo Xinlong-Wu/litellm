@@ -22,7 +22,6 @@ from typing import (
     Any,
     Collection,
     Dict,
-    Iterable,
     List,
     Literal,
     NoReturn,
@@ -666,6 +665,13 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 ) from e
 
         llm_model_list = llm_router.model_list if llm_router is not None else None
+        if (
+            team_object is None
+            and user_api_key_dict.team_id is None
+            and SpecialModelNames.all_team_models.value in (user_api_key_dict.models or [])
+        ):
+            return
+
         for model in models_to_check:
             model_to_check = model
             try:

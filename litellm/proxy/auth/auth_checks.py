@@ -10,6 +10,7 @@ Run checks for:
 """
 
 import asyncio
+import inspect
 import math
 import re
 import time
@@ -2338,7 +2339,7 @@ class ExperimentalUIJWTToken:
             key_name=session_alias,
             key_alias=session_alias,
             expires=expires,
-            max_budget=max_budget,
+            max_budget=max_budget if max_budget is not None else litellm.max_ui_session_budget,
             user_id=user_info.user_id,
             team_id=_team_id,
             team_alias=team_alias,
@@ -2965,13 +2966,11 @@ def _resolve_key_models_for_auth_check(valid_token: UserAPIKeyAuth) -> List[str]
     ``all-team-models`` means inherit the parent team's allowlist -- same
     semantics as ``get_key_models`` in ``model_checks.py``.
 
-    If the key has no team_id, it inherits the full proxy model list
-    (equivalent to an empty models field, i.e. unrestricted access).
     """
     models = list(valid_token.models or [])
     if SpecialModelNames.all_team_models.value in models:
         if valid_token.team_id is None:
-            return []
+            return models
         return list(valid_token.team_models or [])
     return models
 
@@ -3494,12 +3493,12 @@ async def _virtual_key_max_budget_check(
             key_alias=valid_token.key_alias,
             event_group=Litellm_EntityType.KEY,
         )
-        asyncio.create_task(
-            proxy_logging_obj.budget_alerts(
-                type="token_budget",
-                user_info=call_info,
-            )
+        budget_alert = proxy_logging_obj.budget_alerts(
+            type="token_budget",
+            user_info=call_info,
         )
+        if inspect.isawaitable(budget_alert):
+            asyncio.create_task(budget_alert)
 
         ####################################
         # collect information for alerting #
