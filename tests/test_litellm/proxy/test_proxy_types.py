@@ -107,6 +107,28 @@ def test_user_api_key_auth_hashes_authorization_header_form_of_key():
         assert not from_header.api_key.lower().startswith("bearer")
 
 
+def test_new_user_response_parses_model_group_max_budget_json_string():
+    """
+    Regression test: DB JSON columns come back as strings, and the
+    GenerateKeyResponse.set_model_info validator json.loads them before the
+    Optional[dict] check. model_group_max_budget was missing from that allow-list,
+    so /user/new raised "Input should be a valid dictionary ... input_type=str"
+    when the row stored '{}'. It must parse just like model_max_budget.
+    """
+    from litellm.proxy._types import NewUserResponse
+
+    response = NewUserResponse(
+        key="sk-1234",
+        model_group_max_budget='{"group-a": 10.0}',
+        model_max_budget='{"gpt-4": {"max_budget": 5.0}}',
+    )
+    assert response.model_group_max_budget == {"group-a": 10.0}
+    assert response.model_max_budget == {"gpt-4": {"max_budget": 5.0}}
+
+    empty = NewUserResponse(key="sk-1234", model_group_max_budget="{}")
+    assert empty.model_group_max_budget == {}
+
+
 def test_proxy_exception_str_returns_message():
     """ProxyException must stringify to its message: OTEL's
     ``span.record_exception`` and ``str(exc)``-based logging read the string
