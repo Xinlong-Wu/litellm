@@ -11,6 +11,7 @@ import pytest
 from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
 from litellm.llms.bedrock.common_utils import bedrock_converse_supports_strict_tools
 
+
 _STRICT_TOOL = [
     {
         "type": "function",
@@ -47,9 +48,7 @@ _STRICT_TOOL = [
 def test_bedrock_tools_pt_strict_dropped_for_opus_47_48(model_id: str) -> None:
     """Opus 4.7/4.8 on Bedrock Converse reject toolSpec.strict — must be dropped."""
     result = _bedrock_tools_pt(_STRICT_TOOL, model=model_id)
-    assert (
-        "strict" not in result[0]["toolSpec"]
-    ), f"strict leaked into toolSpec for {model_id}: {result[0]['toolSpec']}"
+    assert "strict" not in result[0]["toolSpec"], f"strict leaked into toolSpec for {model_id}: {result[0]['toolSpec']}"
 
 
 @pytest.mark.parametrize(
@@ -64,9 +63,7 @@ def test_bedrock_tools_pt_strict_dropped_for_opus_47_48(model_id: str) -> None:
 def test_bedrock_tools_pt_strict_kept_for_other_anthropic(model_id: str) -> None:
     """Sonnet 4.5/4.6 and Opus <=4.6 accept toolSpec.strict — keep forwarding it."""
     result = _bedrock_tools_pt(_STRICT_TOOL, model=model_id)
-    assert (
-        result[0]["toolSpec"]["strict"] is True
-    ), f"strict missing for {model_id}: {result[0]['toolSpec']}"
+    assert result[0]["toolSpec"]["strict"] is True, f"strict missing for {model_id}: {result[0]['toolSpec']}"
 
 
 @pytest.mark.parametrize(
@@ -84,24 +81,10 @@ def test_bedrock_tools_pt_strict_dropped_for_non_anthropic(model_id: str) -> Non
 
 def test_bedrock_converse_supports_strict_tools_helper() -> None:
     """Direct check for the gate helper used by factory.py."""
-    assert (
-        bedrock_converse_supports_strict_tools("bedrock/us.anthropic.claude-opus-4-7")
-        is False
-    )
-    assert (
-        bedrock_converse_supports_strict_tools("bedrock/us.anthropic.claude-opus-4-8")
-        is False
-    )
-    assert (
-        bedrock_converse_supports_strict_tools(
-            "anthropic.claude-sonnet-4-5-20250929-v1:0"
-        )
-        is True
-    )
-    assert (
-        bedrock_converse_supports_strict_tools("bedrock/us.anthropic.claude-opus-4-6")
-        is True
-    )
+    assert bedrock_converse_supports_strict_tools("bedrock/us.anthropic.claude-opus-4-7") is False
+    assert bedrock_converse_supports_strict_tools("bedrock/us.anthropic.claude-opus-4-8") is False
+    assert bedrock_converse_supports_strict_tools("anthropic.claude-sonnet-4-5-20250929-v1:0") is True
+    assert bedrock_converse_supports_strict_tools("bedrock/us.anthropic.claude-opus-4-6") is True
     assert bedrock_converse_supports_strict_tools("us.amazon.nova-micro-v1:0") is False
     assert bedrock_converse_supports_strict_tools("") is False
 

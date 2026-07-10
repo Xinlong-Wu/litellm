@@ -52,9 +52,7 @@ if set_verbose is True:
         "`litellm.set_verbose` is deprecated. Please set `os.environ['LITELLM_LOG'] = 'DEBUG'` for debug logs."
     )
 
-_ENABLE_SECRET_REDACTION = (
-    os.getenv("LITELLM_DISABLE_REDACT_SECRETS", "").lower() != "true"
-)
+_ENABLE_SECRET_REDACTION = os.getenv("LITELLM_DISABLE_REDACT_SECRETS", "").lower() != "true"
 
 
 def _redact_string(value: str) -> str:
@@ -99,9 +97,7 @@ class SecretRedactionFilter(logging.Filter):
         # Redact exception tracebacks
         if record.exc_info and record.exc_info[1] is not None:
             try:
-                record.exc_text = _redact_string(
-                    self._formatter.formatException(record.exc_info)
-                )
+                record.exc_text = _redact_string(self._formatter.formatException(record.exc_info))
             except Exception:
                 pass
 
@@ -224,9 +220,7 @@ class JsonFormatter(Formatter):
             json_record["logger"] = f"{record.filename}:{record.lineno}"
 
         if record.exc_info:
-            json_record["stacktrace"] = record.exc_text or self.formatException(
-                record.exc_info
-            )
+            json_record["stacktrace"] = record.exc_text or self.formatException(record.exc_info)
 
         return safe_dumps(json_record)
 
@@ -470,9 +464,7 @@ class _SharedRotatingFileHandler(TimedRotatingFileHandler):
             self._reopen_if_changed()
         except Exception:
             pass
-        super().emit(
-            record
-        )  # BaseRotatingHandler.emit -> shouldRollover -> doRollover, then write
+        super().emit(record)  # BaseRotatingHandler.emit -> shouldRollover -> doRollover, then write
         if self._dev is None and self.stream is not None:
             # First open under delay=True - record file identity now.
             self._update_dev_ino()
@@ -515,9 +507,7 @@ def _build_file_handler(path: str, use_json: bool) -> _SharedRotatingFileHandler
     )
 
 
-def add_file_logging(
-    path: Optional[str] = None, use_json: Optional[bool] = None
-) -> Optional[str]:
+def add_file_logging(path: Optional[str] = None, use_json: Optional[bool] = None) -> Optional[str]:
     """Attach a daily-rotating file handler to the litellm loggers.
 
     Resolves ``path`` from the argument, then from LITELLM_LOG_FILE / LITELLM_LOG_DIR.
@@ -587,10 +577,7 @@ def _get_uvicorn_log_config(use_json: bool):
     uvicorn_log_level = log_level.upper()
     json_formatter_class = "litellm._logging.JsonFormatter"
     default_fmt = "%(asctime)s %(levelprefix)s %(message)s"
-    access_fmt = (
-        "%(asctime)s %(levelprefix)s %(client_addr)s - "
-        '"%(request_line)s" %(status_code)s'
-    )
+    access_fmt = '%(asctime)s %(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s'
 
     formatters: Dict[str, Any] = {
         "json": {"()": json_formatter_class},

@@ -20,9 +20,7 @@ class AnthropicCountTokensConfig:
     - Response: {"input_tokens": <number>}
     """
 
-    def get_anthropic_count_tokens_endpoint(
-        self, api_base: Optional[str] = None
-    ) -> str:
+    def get_anthropic_count_tokens_endpoint(self, api_base: Optional[str] = None) -> str:
         """
         Get the Anthropic CountTokens API endpoint.
 
@@ -40,11 +38,7 @@ class AnthropicCountTokensConfig:
             The endpoint URL for the CountTokens API
         """
         count_tokens_path = "/v1/messages/count_tokens"
-        base = (
-            api_base
-            or os.getenv("ANTHROPIC_COUNT_TOKENS_API_BASE")
-            or os.getenv("ANTHROPIC_API_BASE")
-        )
+        base = api_base or os.getenv("ANTHROPIC_COUNT_TOKENS_API_BASE") or os.getenv("ANTHROPIC_API_BASE")
         if not base:
             return "https://api.anthropic.com" + count_tokens_path
 

@@ -611,7 +611,7 @@ def test_transform_request_helper_includes_anthropic_beta_and_tools():
     assert fields["tools"][0]["type"] == "computer_20250124"
 
 
-def test_parallel_tool_calls_config_kept_for_flagged_model():
+def test_parallel_tool_calls_config_kept_for_sonnet_4_6():
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -4157,10 +4157,8 @@ _TOOL_PARAM = [
 ]
 
 
-def test_parallel_tool_calls_newer_model_adds_disable_flag(monkeypatch):
+def test_parallel_tool_calls_newer_model_adds_disable_flag():
     """Newer Claude models (4.5+) should get disable_parallel_tool_use in additionalModelRequestFields."""
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
     config = AmazonConverseConfig()
     model = "anthropic.claude-sonnet-4-5-20250929-v1:0"
     messages = [{"role": "user", "content": "What's the weather in SF and NYC?"}]
@@ -4200,9 +4198,7 @@ def test_parallel_tool_calls_flag_decoupled_from_ttl_pricing(monkeypatch):
 
     config = AmazonConverseConfig()
     model = "anthropic.claude-parallel-tool-use-only"
-    monkeypatch.setitem(
-        litellm.model_cost, model, {"supports_parallel_tool_use_config": True}
-    )
+    monkeypatch.setitem(litellm.model_cost, model, {"supports_parallel_tool_use_config": True})
     assert is_claude_4_5_on_bedrock(model) is False
     messages = [{"role": "user", "content": "What's the weather in SF and NYC?"}]
 
@@ -4690,10 +4686,7 @@ def test_cache_control_injection_tool_config_honors_ttl_for_supported_model():
                 }
             ],
             "cache_control_injection_points": [
-                {
-                    "location": "tool_config",
-                    "control": {"type": "ephemeral", "ttl": "1h"},
-                },
+                {"location": "tool_config", "control": {"type": "ephemeral", "ttl": "1h"}},
             ],
         }
         result = config._transform_request(
@@ -4724,14 +4717,8 @@ def test_cache_control_injection_tool_config_honors_ttl_for_regional_model_lacki
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
-        assert (
-            "cache_creation_input_token_cost_above_1hr"
-            not in litellm.model_cost["jp.anthropic.claude-opus-4-7"]
-        )
-        assert (
-            "cache_creation_input_token_cost_above_1hr"
-            in litellm.model_cost["anthropic.claude-opus-4-7"]
-        )
+        assert "cache_creation_input_token_cost_above_1hr" not in litellm.model_cost["jp.anthropic.claude-opus-4-7"]
+        assert "cache_creation_input_token_cost_above_1hr" in litellm.model_cost["anthropic.claude-opus-4-7"]
         config = AmazonConverseConfig()
         messages = [
             {"role": "user", "content": "What is the weather?"},
@@ -4752,10 +4739,7 @@ def test_cache_control_injection_tool_config_honors_ttl_for_regional_model_lacki
                 }
             ],
             "cache_control_injection_points": [
-                {
-                    "location": "tool_config",
-                    "control": {"type": "ephemeral", "ttl": "1h"},
-                },
+                {"location": "tool_config", "control": {"type": "ephemeral", "ttl": "1h"}},
             ],
         }
         result = config._transform_request(

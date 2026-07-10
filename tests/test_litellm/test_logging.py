@@ -6,9 +6,7 @@ from typing import List
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system-path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system-path
 import logging
 import sys
 
@@ -195,9 +193,7 @@ def test_json_formatter_includes_component_field():
         )
         output = formatter.format(record)
         obj = json.loads(output)
-        assert (
-            obj["component"] == logger_name
-        ), f"Expected component={logger_name!r}, got {obj.get('component')!r}"
+        assert obj["component"] == logger_name, f"Expected component={logger_name!r}, got {obj.get('component')!r}"
 
 
 def test_json_formatter_includes_logger_field():
@@ -217,9 +213,7 @@ def test_json_formatter_includes_logger_field():
     )
     output = formatter.format(record)
     obj = json.loads(output)
-    assert (
-        obj["logger"] == "proxy_server.py:123"
-    ), f"Expected logger='proxy_server.py:123', got {obj['logger']!r}"
+    assert obj["logger"] == "proxy_server.py:123", f"Expected logger='proxy_server.py:123', got {obj['logger']!r}"
 
 
 def test_json_formatter_extra_component_not_overwritten():
@@ -238,9 +232,7 @@ def test_json_formatter_extra_component_not_overwritten():
     )
     record.component = "auth-service"
     obj = json.loads(formatter.format(record))
-    assert (
-        obj["component"] == "auth-service"
-    ), f"User-supplied component was overwritten, got {obj['component']!r}"
+    assert obj["component"] == "auth-service", f"User-supplied component was overwritten, got {obj['component']!r}"
 
 
 def test_initialize_loggers_with_handler_sets_propagate_false():
@@ -252,9 +244,9 @@ def test_initialize_loggers_with_handler_sets_propagate_false():
 
     # Check that propagate is set to False for all loggers
     for logger in ALL_LOGGERS:
-        assert (
-            logger.propagate is False
-        ), f"Logger {logger.name} has propagate set to {logger.propagate}, expected False"
+        assert logger.propagate is False, (
+            f"Logger {logger.name} has propagate set to {logger.propagate}, expected False"
+        )
 
 
 @pytest.mark.asyncio
@@ -292,9 +284,9 @@ async def test_cache_hit_includes_custom_llm_provider():
         await asyncio.sleep(0.5)
 
         # Verify we have logged events
-        assert (
-            len(test_custom_logger.logged_standard_logging_payloads) >= 2
-        ), f"Expected at least 2 logged events, got {len(test_custom_logger.logged_standard_logging_payloads)}"
+        assert len(test_custom_logger.logged_standard_logging_payloads) >= 2, (
+            f"Expected at least 2 logged events, got {len(test_custom_logger.logged_standard_logging_payloads)}"
+        )
 
         # Find the cache hit event (should be the second call)
         cache_hit_payload = None
@@ -304,20 +296,18 @@ async def test_cache_hit_includes_custom_llm_provider():
                 break
 
         # Verify cache hit event was found
-        assert (
-            cache_hit_payload is not None
-        ), "No cache hit event found in logged payloads"
+        assert cache_hit_payload is not None, "No cache hit event found in logged payloads"
 
         # Verify custom_llm_provider is included in the cache hit payload
-        assert (
-            "custom_llm_provider" in cache_hit_payload
-        ), "custom_llm_provider missing from cache hit standard logging payload"
+        assert "custom_llm_provider" in cache_hit_payload, (
+            "custom_llm_provider missing from cache hit standard logging payload"
+        )
 
         # Verify custom_llm_provider has a valid value (should be "openai" for gpt-3.5-turbo)
         custom_llm_provider = cache_hit_payload["custom_llm_provider"]
-        assert (
-            custom_llm_provider is not None and custom_llm_provider != ""
-        ), f"custom_llm_provider should not be None or empty, got: {custom_llm_provider}"
+        assert custom_llm_provider is not None and custom_llm_provider != "", (
+            f"custom_llm_provider should not be None or empty, got: {custom_llm_provider}"
+        )
 
         print(
             f"Cache hit standard logging payload with custom_llm_provider: {custom_llm_provider}",
@@ -375,9 +365,7 @@ def test_add_file_logging_writes_marker_to_explicit_path(tmp_path, clean_file_lo
     assert "hello-file-marker-123" in log_file.read_text()
 
 
-def test_log_dir_env_resolves_default_filename(
-    tmp_path, clean_file_logging, monkeypatch
-):
+def test_log_dir_env_resolves_default_filename(tmp_path, clean_file_logging, monkeypatch):
     monkeypatch.setenv("LITELLM_LOG_DIR", str(tmp_path))
     resolved = add_file_logging()
 
@@ -393,9 +381,7 @@ def test_add_file_logging_is_idempotent(tmp_path, clean_file_logging):
     add_file_logging(log_file)
 
     for lg in _FILE_LOG_LOGGERS:
-        file_handlers = [
-            h for h in lg.handlers if isinstance(h, _SharedRotatingFileHandler)
-        ]
+        file_handlers = [h for h in lg.handlers if isinstance(h, _SharedRotatingFileHandler)]
         assert len(file_handlers) == 1
 
 
@@ -404,9 +390,7 @@ def test_add_file_logging_no_op_without_config(clean_file_logging):
     assert _logging_module._app_file_handler is None
 
 
-def test_file_handler_is_daily_rotating_with_retention(
-    tmp_path, clean_file_logging, monkeypatch
-):
+def test_file_handler_is_daily_rotating_with_retention(tmp_path, clean_file_logging, monkeypatch):
     monkeypatch.setenv("LITELLM_LOG_RETENTION_DAYS", "7")
     add_file_logging(str(tmp_path / "litellm.log"))
 
@@ -427,9 +411,7 @@ def test_rollover_is_mutually_exclusive_across_holders(tmp_path, clean_file_logg
     verbose_proxy_logger.error("before-rotate")
 
     def dated_files():
-        return [
-            p for p in glob.glob(str(log_file) + ".*") if not p.endswith(".rotate.lock")
-        ]
+        return [p for p in glob.glob(str(log_file) + ".*") if not p.endswith(".rotate.lock")]
 
     # Hold the rotation lock from an independent fd -> handler cannot rotate.
     lock_fd = os.open(_lockfile_for(str(log_file)), os.O_CREAT | os.O_RDWR, 0o644)
@@ -494,9 +476,7 @@ def test_reattach_uses_json_formatter(tmp_path, clean_file_logging, monkeypatch)
     assert isinstance(handler.formatter, JsonFormatter)
 
 
-def test_uvicorn_log_config_adds_file_handler_when_dir_set(
-    tmp_path, clean_file_logging, monkeypatch
-):
+def test_uvicorn_log_config_adds_file_handler_when_dir_set(tmp_path, clean_file_logging, monkeypatch):
     monkeypatch.setenv("LITELLM_LOG_DIR", str(tmp_path))
     assert resolve_uvicorn_log_file() == str(tmp_path / "uvicorn.log")
 

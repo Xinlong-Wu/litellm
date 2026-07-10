@@ -41,9 +41,7 @@ GROUP_RPM = {GROUP_ID: {"rpm_limit": 1}}
 GROUP_MODELS = ["gpt-4o"]
 
 
-async def _seeded_limiter(
-    scope_prefix, scope_id, cost
-) -> _PROXY_VirtualKeyModelMaxBudgetLimiter:
+async def _seeded_limiter(scope_prefix, scope_id, cost) -> _PROXY_VirtualKeyModelMaxBudgetLimiter:
     limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
     await limiter._increment_model_group_spend(
         scope_prefix=scope_prefix,
@@ -55,9 +53,7 @@ async def _seeded_limiter(
     return limiter
 
 
-async def _rate_seeded_limiter(
-    scope_prefix, scope_id
-) -> _PROXY_VirtualKeyModelMaxBudgetLimiter:
+async def _rate_seeded_limiter(scope_prefix, scope_id) -> _PROXY_VirtualKeyModelMaxBudgetLimiter:
     limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
     await limiter._increment_model_group_rate(
         scope_prefix=scope_prefix,
@@ -80,12 +76,8 @@ def _patch_group_models():
 
 @pytest.mark.asyncio
 async def test_user_model_group_budget_blocks_when_over_cap():
-    limiter = await _seeded_limiter(
-        USER_GROUP_SPEND_CACHE_KEY_PREFIX, "user-1", cost=0.02
-    )
-    user_object = LiteLLM_UserTable(
-        user_id="user-1", model_group_max_budget=GROUP_BUDGET
-    )
+    limiter = await _seeded_limiter(USER_GROUP_SPEND_CACHE_KEY_PREFIX, "user-1", cost=0.02)
+    user_object = LiteLLM_UserTable(user_id="user-1", model_group_max_budget=GROUP_BUDGET)
     valid_token = UserAPIKeyAuth(token="tok", user_id="user-1")
 
     with (
@@ -133,9 +125,7 @@ async def test_user_model_group_rate_limit_blocks_when_over_cap():
 
 @pytest.mark.asyncio
 async def test_team_member_model_group_rate_limit_blocks_when_over_cap():
-    limiter = await _rate_seeded_limiter(
-        TEAM_MEMBER_GROUP_RATE_CACHE_KEY_PREFIX, "user-1:team-1"
-    )
+    limiter = await _rate_seeded_limiter(TEAM_MEMBER_GROUP_RATE_CACHE_KEY_PREFIX, "user-1:team-1")
     team_object = LiteLLM_TeamTable(team_id="team-1", team_alias="t")
     valid_token = UserAPIKeyAuth(token="tok", user_id="user-1", team_id="team-1")
 
@@ -169,12 +159,8 @@ async def test_team_member_model_group_rate_limit_blocks_when_over_cap():
 
 @pytest.mark.asyncio
 async def test_user_model_group_budget_passes_for_model_outside_group():
-    limiter = await _seeded_limiter(
-        USER_GROUP_SPEND_CACHE_KEY_PREFIX, "user-1", cost=0.02
-    )
-    user_object = LiteLLM_UserTable(
-        user_id="user-1", model_group_max_budget=GROUP_BUDGET
-    )
+    limiter = await _seeded_limiter(USER_GROUP_SPEND_CACHE_KEY_PREFIX, "user-1", cost=0.02)
+    user_object = LiteLLM_UserTable(user_id="user-1", model_group_max_budget=GROUP_BUDGET)
     valid_token = UserAPIKeyAuth(token="tok", user_id="user-1")
 
     # gpt-4o-mini is not in GROUP_MODELS -> _can_object_call_model raises -> no match
@@ -198,9 +184,7 @@ async def test_user_model_group_budget_noop_without_config():
     user_object = LiteLLM_UserTable(user_id="user-1", model_group_max_budget={})
     valid_token = UserAPIKeyAuth(token="tok", user_id="user-1")
     failing_limiter = MagicMock()
-    failing_limiter.is_user_within_model_group_budget = AsyncMock(
-        side_effect=AssertionError("should not enforce")
-    )
+    failing_limiter.is_user_within_model_group_budget = AsyncMock(side_effect=AssertionError("should not enforce"))
     with patch("litellm.proxy.proxy_server.model_max_budget_limiter", failing_limiter):
         await _check_user_model_group_budget(
             user_object=user_object,
@@ -215,9 +199,7 @@ async def test_user_model_group_budget_noop_without_config():
 
 @pytest.mark.asyncio
 async def test_team_member_group_budget_per_member_override():
-    limiter = await _seeded_limiter(
-        "team_member_model_group_spend", "user-1:team-1", cost=0.02
-    )
+    limiter = await _seeded_limiter("team_member_model_group_spend", "user-1:team-1", cost=0.02)
     team_object = LiteLLM_TeamTable(team_id="team-1", team_alias="t")
     valid_token = UserAPIKeyAuth(token="tok", user_id="user-1", team_id="team-1")
 
@@ -251,9 +233,7 @@ async def test_team_member_group_budget_per_member_override():
 
 @pytest.mark.asyncio
 async def test_team_member_group_budget_falls_back_to_team_default():
-    limiter = await _seeded_limiter(
-        "team_member_model_group_spend", "user-1:team-1", cost=0.02
-    )
+    limiter = await _seeded_limiter("team_member_model_group_spend", "user-1:team-1", cost=0.02)
     team_object = LiteLLM_TeamTable(
         team_id="team-1",
         team_alias="t",
