@@ -1828,6 +1828,7 @@ async def test_update_team_team_member_budget_not_passed_to_db():
             team_member_rpm_limit=None,
             team_member_tpm_limit=None,
             team_member_budget_duration=None,
+            team_member_model_group_max_budget=None,
         ):
             # Remove team_member_budget from updated_kv as the real function does
             result_kv = updated_kv.copy()
@@ -2305,6 +2306,7 @@ async def test_update_team_with_team_member_budget_duration():
             team_member_rpm_limit=None,
             team_member_tpm_limit=None,
             team_member_budget_duration=None,
+            team_member_model_group_max_budget=None,
         ):
             result_kv = updated_kv.copy()
             result_kv.pop("team_member_budget", None)
