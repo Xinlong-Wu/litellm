@@ -11,12 +11,11 @@ import asyncio
 import fnmatch
 import re
 import secrets
-
-import orjson
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterator, NamedTuple, List, Optional, Protocol, Tuple, Union, cast
+from typing import Any, Dict, Iterator, List, NamedTuple, Optional, Protocol, Tuple, Union, cast
 
 import fastapi
+import orjson
 from fastapi import HTTPException, Request, WebSocket, status
 from fastapi.security.api_key import APIKeyHeader
 
@@ -52,6 +51,7 @@ from litellm.proxy.auth.auth_checks import (
     resolve_and_validate_end_user_id,
 )
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
+from litellm.proxy.auth.auth_method import AuthMethod
 from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
     get_end_user_id_from_request_body,
@@ -63,10 +63,9 @@ from litellm.proxy.auth.auth_utils import (
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+from litellm.proxy.auth.network import TrustedProxyConfig, resolve_network_context
 from litellm.proxy.auth.oauth2_check import Oauth2Handler
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
-from litellm.proxy.auth.auth_method import AuthMethod
-from litellm.proxy.auth.network import TrustedProxyConfig, resolve_network_context
 from litellm.proxy.auth.resolvers import CredentialRef, Principal
 from litellm.proxy.auth.resolvers.store import IdentityStore
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -254,6 +253,13 @@ async def _check_key_model_budget_with_fallback(
         path_params = request.scope.get("path_params")
         if isinstance(path_params, dict) and "model" in path_params:
             path_params["model"] = fallback_model
+
+
+def _normalize_expiry_time(expires: Union[str, datetime]) -> datetime:
+    expiry_time = expires if isinstance(expires, datetime) else datetime.fromisoformat(expires)
+    if expiry_time.tzinfo is None or expiry_time.tzinfo.utcoffset(expiry_time) is None:
+        return expiry_time.astimezone()
+    return expiry_time
 
 
 def _get_bearer_token_or_received_api_key(api_key: str) -> str:
@@ -1512,12 +1518,7 @@ async def _user_api_key_auth_builder(
         ):
             if valid_token.expires is not None:
                 current_time = datetime.now(timezone.utc)
-                if isinstance(valid_token.expires, datetime):
-                    expiry_time = valid_token.expires
-                else:
-                    expiry_time = datetime.fromisoformat(valid_token.expires)
-                if expiry_time.tzinfo is None or expiry_time.tzinfo.utcoffset(expiry_time) is None:
-                    expiry_time = expiry_time.replace(tzinfo=timezone.utc)
+                expiry_time = _normalize_expiry_time(valid_token.expires)
                 if expiry_time < current_time:
                     await _delete_cache_key_object(
                         hashed_token=hash_token(api_key),
@@ -1800,12 +1801,7 @@ async def _user_api_key_auth_builder(
             # Check 3. If token is expired
             if valid_token.expires is not None:
                 current_time = datetime.now(timezone.utc)
-                if isinstance(valid_token.expires, datetime):
-                    expiry_time = valid_token.expires
-                else:
-                    expiry_time = datetime.fromisoformat(valid_token.expires)
-                if expiry_time.tzinfo is None or expiry_time.tzinfo.utcoffset(expiry_time) is None:
-                    expiry_time = expiry_time.replace(tzinfo=timezone.utc)
+                expiry_time = _normalize_expiry_time(valid_token.expires)
                 verbose_proxy_logger.debug(
                     f"Checking if token expired, expiry time {expiry_time} and current time {current_time}"
                 )
@@ -2635,6 +2631,7 @@ async def _return_user_api_key_auth_obj(
             user_email=user_obj.user_email,
             user_spend=getattr(user_obj, "spend", None),
             user_max_budget=getattr(user_obj, "max_budget", None),
+            user_model_group_max_budget=getattr(user_obj, "model_group_max_budget", None),
         )
     if user_obj is not None and _is_user_proxy_admin(user_obj=user_obj):
         user_api_key_kwargs.update(
@@ -2892,12 +2889,7 @@ async def _run_post_custom_auth_checks(
     # 2. Check token expiry
     if valid_token.expires is not None:
         current_time = datetime.now(timezone.utc)
-        if isinstance(valid_token.expires, datetime):
-            expiry_time = valid_token.expires
-        else:
-            expiry_time = datetime.fromisoformat(valid_token.expires)
-        if expiry_time.tzinfo is None or expiry_time.tzinfo.utcoffset(expiry_time) is None:
-            expiry_time = expiry_time.replace(tzinfo=timezone.utc)
+        expiry_time = _normalize_expiry_time(valid_token.expires)
         if expiry_time < current_time:
             raise ProxyException(
                 message=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",

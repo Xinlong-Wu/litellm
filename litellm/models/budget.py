@@ -28,6 +28,7 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
     model_max_budget: Optional[dict] = None
+    model_group_max_budget: Optional[dict] = None
     budget_duration: Optional[str] = None
     allowed_models: Optional[List[str]] = None  # per-member model scope; empty = inherit team models
 

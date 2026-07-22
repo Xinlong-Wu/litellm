@@ -83,6 +83,10 @@ COPY --from=ui-builder /ui/out/. litellm/proxy/_experimental/out/
 # Set non-root flag for build time consistency
 ENV LITELLM_NON_ROOT=true
 
+RUN test -f litellm/proxy/_experimental/out/index.html && \
+    test -d litellm/proxy/_experimental/out/_next || \
+    (echo "Admin UI assets missing. Run ./docker/build_admin_ui.sh before docker build." >&2; exit 1)
+
 RUN mkdir -p /var/lib/litellm/ui /var/lib/litellm/assets && \
     cp -r /app/litellm/proxy/_experimental/out/. /var/lib/litellm/ui/ && \
     cp /app/litellm/proxy/logo.jpg /var/lib/litellm/assets/logo.jpg && \
@@ -145,6 +149,8 @@ ENV PATH="/app/.venv/bin:${PATH}" \
     PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
     HOME=/app \
     LITELLM_NON_ROOT=true \
+    LITELLM_UI_PATH=/var/lib/litellm/ui \
+    LITELLM_ASSETS_PATH=/var/lib/litellm/assets \
     XDG_CACHE_HOME=/app/.cache \
     PRISMA_SKIP_POSTINSTALL_GENERATE=1 \
     PRISMA_HIDE_UPDATE_MESSAGE=1 \

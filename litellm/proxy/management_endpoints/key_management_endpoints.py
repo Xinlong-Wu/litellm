@@ -3530,6 +3530,7 @@ async def generate_key_helper_fn(
     permissions: Optional[dict] = {},
     model_max_budget: Optional[dict] = {},
     budget_fallbacks: Optional[dict] = None,
+    model_group_max_budget: Optional[dict] = None,
     model_rpm_limit: Optional[dict] = None,
     model_tpm_limit: Optional[dict] = None,
     mcp_rpm_limit: Optional[dict] = None,
@@ -3621,6 +3622,7 @@ async def generate_key_helper_fn(
     validate_model_max_budget(model_max_budget)
     model_max_budget_json = json.dumps(model_max_budget)
     budget_fallbacks_json = json.dumps(budget_fallbacks or {})
+    model_group_max_budget_json = json.dumps(model_group_max_budget or {})
     user_role = user_role
     tpm_limit = tpm_limit
     rpm_limit = rpm_limit
@@ -3648,6 +3650,7 @@ async def generate_key_helper_fn(
             "allowed_cache_controls": allowed_cache_controls,
             "sso_user_id": sso_user_id,
             "object_permission_id": object_permission_id,
+            "model_group_max_budget": model_group_max_budget_json,
         }
         if teams is not None:
             user_data["teams"] = teams

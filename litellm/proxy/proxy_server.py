@@ -322,6 +322,10 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
+from litellm.proxy.db.db_transaction_queue.spend_log_prompt_cleanup import (
+    SpendLogPromptCleanup,
+    parse_prompt_retention_seconds,
+)
 from litellm.proxy.db.exception_handler import (
     PrismaDBExceptionHandler,
     call_with_db_reconnect_retry,
@@ -7624,6 +7628,29 @@ class ProxyStartupEvent:
                     )
                 except ValueError:
                     verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value")
+
+        ### SPEND LOG PROMPT CLEANUP ###
+        prompt_retention_period = general_settings.get("maximum_spend_logs_prompt_retention_period")
+        prompt_retention_seconds = parse_prompt_retention_seconds(prompt_retention_period)
+        if prompt_retention_period is not None and prompt_retention_seconds is not None:
+            spend_log_prompt_cleanup = SpendLogPromptCleanup()
+            scheduler.add_job(
+                spend_log_prompt_cleanup.scrub_old_prompts,
+                "interval",
+                seconds=prompt_retention_seconds + random.randint(0, 60),
+                args=[prisma_client],
+                id="spend_log_prompt_cleanup_job",
+                replace_existing=True,
+                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+            )
+            verbose_proxy_logger.info(
+                f"Spend log prompt cleanup scheduled every {prompt_retention_period}; "
+                f"scrubs prompts older than {prompt_retention_period}"
+            )
+        elif prompt_retention_period is not None:
+            verbose_proxy_logger.error(
+                f"Invalid maximum_spend_logs_prompt_retention_period value: {prompt_retention_period}"
+            )
         ### CHECK BATCH COST ###
         if llm_router is not None and PROXY_BATCH_POLLING_ENABLED:
             try:
