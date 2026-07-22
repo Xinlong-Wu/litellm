@@ -2334,8 +2334,8 @@ def _is_unsignable_thinking_block(block: object) -> bool:
 
 
 def _drop_unsignable_thinking_blocks(
-    thinking_blocks: list[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]],
-) -> list[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]:
+    thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
+) -> list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock]:
     return [block for block in thinking_blocks if not _is_unsignable_thinking_block(block)]
 
 
