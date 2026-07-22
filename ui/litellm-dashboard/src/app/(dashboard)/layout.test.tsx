@@ -75,4 +75,19 @@ describe("(dashboard) Layout", () => {
     expect(screen.getByTestId("navbar")).toBeTruthy();
     expect(screen.queryByTestId("loading-screen")).toBeNull();
   });
+
+  it("allows dashboard route content to shrink within the flex layout", async () => {
+    render(
+      <AuthProvider>
+        <Layout>
+          <div data-testid="page-content" />
+        </Layout>
+      </AuthProvider>,
+    );
+
+    pendingUiConfig.resolve();
+
+    const pageContent = await screen.findByTestId("page-content");
+    expect(pageContent.closest("main")).toHaveClass("min-w-0");
+  });
 });
