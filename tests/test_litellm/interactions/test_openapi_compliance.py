@@ -16,6 +16,8 @@ import httpx
 import pytest
 from openapi_core import OpenAPI
 
+from litellm.types.interactions import Interaction, InteractionStatus
+
 OPENAPI_SPEC_URL = "https://ai.google.dev/static/api/interactions.openapi.json"
 
 
@@ -194,8 +196,12 @@ class TestResponseCompliance:
             "cancelled",
             "incomplete",
             "budget_exceeded",
+            "queued",
         ]
         assert status_prop["enum"] == expected_statuses
+        assert [status.value for status in InteractionStatus] == expected_statuses
+        interaction = Interaction.model_validate({"id": "interaction-test", "status": "queued"})
+        assert interaction.status.value == "queued"
         print(f"✓ Status enum values: {expected_statuses}")
 
     def test_usage_schema(self, spec_dict):
