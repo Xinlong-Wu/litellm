@@ -5,6 +5,7 @@ import { Button as Button2, Modal, Form, Select as Select2, InputNumber } from "
 
 import NumericalInput from "@/components/shared/numerical_input";
 import BudgetDurationDropdown from "@/components/common_components/budget_duration_dropdown";
+import ModelGroupBudgetEditor from "@/components/common_components/ModelGroupBudgetEditor";
 
 interface EditUserModalProps {
   visible: boolean;
@@ -93,6 +94,14 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, possibleUIRoles,
 
           <Form.Item label="Reset Budget" name="budget_duration">
             <BudgetDurationDropdown />
+          </Form.Item>
+
+          <Form.Item
+            label="Model Group Budgets"
+            name="model_group_max_budget"
+            tooltip="Cap dollar spend per access group, aggregated across all of this user's keys."
+          >
+            <ModelGroupBudgetEditor />
           </Form.Item>
 
           <div style={{ textAlign: "right", marginTop: "10px" }}>

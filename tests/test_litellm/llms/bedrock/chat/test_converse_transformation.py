@@ -611,7 +611,11 @@ def test_transform_request_helper_includes_anthropic_beta_and_tools():
     assert fields["tools"][0]["type"] == "computer_20250124"
 
 
-def test_parallel_tool_calls_config_kept_for_sonnet_5():
+@pytest.mark.parametrize(
+    "model",
+    ["anthropic.claude-sonnet-4-6", "anthropic.claude-sonnet-5"],
+)
+def test_parallel_tool_calls_config_kept_for_supported_sonnet_models(model: str):
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -619,14 +623,14 @@ def test_parallel_tool_calls_config_kept_for_sonnet_5():
     try:
         config = AmazonConverseConfig()
         optional_params = config.map_openai_params(
-            model="anthropic.claude-sonnet-5",
+            model=model,
             non_default_params={"parallel_tool_calls": False},
             optional_params={},
             drop_params=False,
         )
 
         data = config._transform_request_helper(
-            model="anthropic.claude-sonnet-5",
+            model=model,
             system_content_blocks=[],
             optional_params=optional_params,
             messages=None,

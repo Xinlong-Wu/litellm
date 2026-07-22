@@ -4,9 +4,7 @@ import os
 import sys
 from unittest.mock import patch, MagicMock, AsyncMock
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 import litellm
 import pytest
@@ -21,12 +19,20 @@ def reload_huggingface_modules():
     Reload modules to ensure fresh references after conftest reloads litellm.
     This ensures the HTTPHandler class being patched is the same one used by
     the embedding handler during parallel test execution.
+
+    The conftest only reloads litellm in single-process mode (module reload
+    under xdist corrupts class identity across the worker). Reloading
+    http_handler here under xdist swaps HTTPHandler / MaskedHTTPStatusError for
+    new class objects mid-run, so sibling custom_httpx tests on the same worker
+    that already imported the originals fail isinstance / pytest.raises. Mirror
+    the conftest guard: only reload when not running in parallel.
     """
     import litellm.llms.custom_httpx.http_handler as http_handler_module
     import litellm.llms.huggingface.embedding.handler as hf_embedding_handler_module
 
-    importlib.reload(http_handler_module)
-    importlib.reload(hf_embedding_handler_module)
+    if os.environ.get("PYTEST_XDIST_WORKER") is None:
+        importlib.reload(http_handler_module)
+        importlib.reload(hf_embedding_handler_module)
     yield
 
 
@@ -61,9 +67,7 @@ def mock_embedding_async_http_handler(reload_huggingface_modules):
 class TestHuggingFaceEmbedding:
     @pytest.fixture(autouse=True)
     def setup(self, mock_embedding_http_handler, mock_embedding_async_http_handler):
-        self.mock_get_task_patcher = patch(
-            "litellm.llms.huggingface.embedding.handler.get_hf_task_embedding_for_model"
-        )
+        self.mock_get_task_patcher = patch("litellm.llms.huggingface.embedding.handler.get_hf_task_embedding_for_model")
         self.mock_get_task = self.mock_get_task_patcher.start()
 
         def mock_get_task_side_effect(model, task_type, api_base):
