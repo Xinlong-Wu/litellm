@@ -5,11 +5,13 @@ import logging
 import os
 import sys
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+
+from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
 
 # Add the parent directory to the path so we can import litellm
 sys.path.insert(0, "../../../../../")
@@ -589,6 +591,332 @@ class TestMCPServerManager:
         assert captured_extra_headers == {"Authorization": "Bearer token"}
         assert isinstance(result, CallToolResult)
 
+    async def _capture_list_subject_token(self, server, oauth2_headers, raw_headers=None):
+        """Run _get_tools_from_server and return the subject_token it threaded to _create_mcp_client."""
+        manager = MCPServerManager()
+        captured = {}
+
+        async def capture_create_mcp_client(
+            server, mcp_auth_header, extra_headers, stdio_env, subject_token=None, **kwargs
+        ):  # pragma: no cover - helper
+            captured["subject_token"] = subject_token
+            return AsyncMock()
+
+        manager._create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
+        manager._fetch_tools_with_timeout = AsyncMock(return_value=[])
+        await manager._get_tools_from_server(server=server, oauth2_headers=oauth2_headers, raw_headers=raw_headers)
+        return captured["subject_token"]
+
+    @pytest.mark.asyncio
+    async def test_list_threads_subject_token_for_token_exchange(self):
+        """tools/list discovery must hand the caller's bearer to the resolver for OBO servers."""
+        server = MCPServer(
+            server_id="te-list",
+            name="te-list-server",
+            url="https://up.example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+        )
+        subject_token = await self._capture_list_subject_token(
+            server, oauth2_headers={"Authorization": "Bearer subj-jwt"}
+        )
+        assert subject_token == "subj-jwt"
+
+    @pytest.mark.asyncio
+    async def test_list_does_not_thread_subject_token_for_non_token_exchange(self):
+        """A non-OBO server must not get the caller's bearer threaded (no leak across modes)."""
+        server = MCPServer(
+            server_id="none-list",
+            name="none-list-server",
+            url="https://up.example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+        )
+        subject_token = await self._capture_list_subject_token(
+            server, oauth2_headers={"Authorization": "Bearer subj-jwt"}
+        )
+        assert subject_token is None
+
+    @pytest.mark.asyncio
+    async def test_list_subject_token_none_without_oauth2_headers(self):
+        """Background/registry refresh (no oauth2 headers) lists with no subject token, as before."""
+        server = MCPServer(
+            server_id="te-list-bg",
+            name="te-list-bg-server",
+            url="https://up.example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+        )
+        subject_token = await self._capture_list_subject_token(server, oauth2_headers=None)
+        assert subject_token is None
+
+    @pytest.mark.asyncio
+    async def test_list_surfaces_resolver_401_as_upstream_auth_error(self):
+        """A v2 resolver auth challenge (HTTPException 401) raised while building the client must
+        surface as MCPUpstreamAuthError with its WWW-Authenticate preserved, so single-server routes
+        challenge the client instead of the old behavior of masking it to an empty tool list."""
+        server = MCPServer(
+            server_id="te-401",
+            name="te-401-server",
+            url="https://up.example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+        )
+        manager = MCPServerManager()
+        challenge = (
+            'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/te-401-server", error="invalid_token"'
+        )
+        manager._create_mcp_client = AsyncMock(
+            side_effect=HTTPException(status_code=401, detail="Unauthorized", headers={"WWW-Authenticate": challenge})
+        )
+        with pytest.raises(MCPUpstreamAuthError) as exc_info:
+            await manager._get_tools_from_server(server=server, oauth2_headers={"Authorization": "Bearer subj-jwt"})
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.www_authenticate == challenge
+
+    @pytest.mark.asyncio
+    async def test_list_absorbs_non_auth_httpexception(self):
+        """A non-auth HTTP error (e.g. 412 no endpoint, 503 IdP down) must stay absorbed to [] so one
+        misconfigured/unavailable server does not blank the whole aggregate listing."""
+        server = MCPServer(
+            server_id="te-412",
+            name="te-412-server",
+            url="https://up.example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+        )
+        manager = MCPServerManager()
+        manager._create_mcp_client = AsyncMock(
+            side_effect=HTTPException(status_code=412, detail="token exchange endpoint is not configured")
+        )
+        result = await manager._get_tools_from_server(
+            server=server, oauth2_headers={"Authorization": "Bearer subj-jwt"}
+        )
+        assert result == []
+
+    def _token_exchange_server(self, server_id: str) -> "MCPServer":
+        return MCPServer(
+            server_id=server_id,
+            name=f"{server_id}-server",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+        )
+
+    async def _capture_subject_token(self, call) -> Optional[str]:
+        """Run a manager method (via ``call(manager)``) and return the subject_token it threaded
+        into ``_create_mcp_client``."""
+        manager = MCPServerManager()
+        captured: Dict[str, Any] = {}
+
+        async def capture_create_mcp_client(
+            server, mcp_auth_header, extra_headers, stdio_env, subject_token=None, **kwargs
+        ):  # pragma: no cover - helper
+            captured["subject_token"] = subject_token
+            return AsyncMock()
+
+        manager._create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
+        await call(manager)
+        return captured.get("subject_token")
+
+    @pytest.mark.asyncio
+    async def test_prompts_thread_subject_token_for_token_exchange(self):
+        """prompts/list on an OBO server must exchange the caller's bearer, not connect with none."""
+        server = self._token_exchange_server("te-prompts")
+        st = await self._capture_subject_token(
+            lambda m: m.get_prompts_from_server(server=server, raw_headers={"authorization": "Bearer subj-jwt"})
+        )
+        assert st == "subj-jwt"
+
+    @pytest.mark.asyncio
+    async def test_resources_thread_subject_token_for_token_exchange(self):
+        """resources/list on an OBO server must exchange the caller's bearer."""
+        server = self._token_exchange_server("te-resources")
+        st = await self._capture_subject_token(
+            lambda m: m.get_resources_from_server(server=server, raw_headers={"authorization": "Bearer subj-jwt"})
+        )
+        assert st == "subj-jwt"
+
+    @pytest.mark.asyncio
+    async def test_read_resource_threads_subject_token_for_token_exchange(self):
+        """resources/read on an OBO server must exchange the caller's bearer."""
+        server = self._token_exchange_server("te-read")
+        st = await self._capture_subject_token(
+            lambda m: m.read_resource_from_server(
+                server=server,
+                url="https://up.example.com/r",
+                raw_headers={"authorization": "Bearer subj-jwt"},
+            )
+        )
+        assert st == "subj-jwt"
+
+    @pytest.mark.asyncio
+    async def test_prompts_no_subject_token_for_non_token_exchange(self):
+        """A non-OBO server must not get the caller's bearer threaded (no cross-mode leak)."""
+        server = MCPServer(
+            server_id="none-prompts",
+            name="none-prompts-server",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+        )
+        st = await self._capture_subject_token(
+            lambda m: m.get_prompts_from_server(server=server, raw_headers={"authorization": "Bearer subj-jwt"})
+        )
+        assert st is None
+
+    @pytest.mark.asyncio
+    async def test_caller_header_cannot_bypass_v2_for_token_exchange(self):
+        """A caller-supplied per-server header (x-mcp-*) must NOT disable the OBO exchange:
+        _create_mcp_client keeps the v2 spec and runs the resolver (which exchanges the subject),
+        rather than deferring to v1 and forwarding the caller's header verbatim upstream."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        exchanged_subjects = []
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                exchanged_subjects.append(subject.inbound_token.get_secret_value() if subject.inbound_token else None)
+                return Ok(StaticHeaderAuth("Bearer MINTED", header_name="Authorization"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = self._token_exchange_server("te-bypass")
+
+        client = await manager._create_mcp_client(
+            server,
+            mcp_auth_header="Bearer x-mcp-caller-header",
+            subject_token="subj-jwt",
+        )
+
+        # The resolver ran and exchanged the subject despite the per-server header; not bypassed.
+        assert exchanged_subjects == ["subj-jwt"]
+        assert client is not None
+
+    @pytest.mark.asyncio
+    async def test_injected_authorization_does_not_shadow_obo_minted_token(self):
+        """A guardrail/static Authorization (e.g. MCPJWTSigner) must NOT shadow the exchanged OBO
+        token. The resolver-owned credential is authoritative: the conflicting header is dropped and
+        the minted token is what reaches the upstream, not the injected JWT."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                return Ok(StaticHeaderAuth("Bearer MINTED", header_name="Authorization"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = self._token_exchange_server("te-shadow")
+
+        client = await manager._create_mcp_client(
+            server,
+            extra_headers={"Authorization": "Bearer signer-jwt"},  # simulate the JWT signer
+            subject_token="subj-jwt",
+        )
+
+        # minted token wins (resolved_auth kept), signer's header dropped from extra_headers
+        assert client._resolved_auth is not None
+        assert "authorization" not in {k.lower() for k in (client.extra_headers or {})}
+
+    @pytest.mark.asyncio
+    async def test_preflight_token_exchange_challenges_on_rejected_subject(self):
+        """A subject the IdP rejects must raise the RFC 9728 401 challenge from the preflight, so a
+        single-server route fails observably at the transport edge instead of the old behavior of
+        the session opening and list_tools masking the failed exchange as an empty tool list."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                return Error(CredError.of_unauthorized("subject token rejected by the IdP"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = self._token_exchange_server("te-preflight-401")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.preflight_token_exchange(
+                server=server,
+                oauth2_headers={"Authorization": "Bearer rejected-subject"},
+                user_api_key_auth=None,
+            )
+        assert exc_info.value.status_code == 401
+        headers = exc_info.value.headers or {}
+        www_authenticate = headers.get("WWW-Authenticate") or headers.get("www-authenticate") or ""
+        assert "resource_metadata" in www_authenticate
+
+    @pytest.mark.asyncio
+    async def test_preflight_token_exchange_maps_gateway_fault_to_public_status(self):
+        """A gateway-fault CredError (e.g. invalid_client) must surface its public status (500)
+        from the preflight, not the OBO 401 challenge and not an empty-success session."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                return Error(CredError.of_misconfigured("token exchange configuration error"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = self._token_exchange_server("te-preflight-500")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.preflight_token_exchange(
+                server=server,
+                oauth2_headers={"Authorization": "Bearer subj"},
+                user_api_key_auth=None,
+            )
+        assert exc_info.value.status_code == 500
+
+    @pytest.mark.asyncio
+    async def test_preflight_token_exchange_noop_on_success_and_without_subject(self):
+        """A successful exchange returns without raising, and a request with no bearer never
+        reaches the resolver (the no-subject case is the existing preemptive challenge's job)."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        resolved = []
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                resolved.append(subject.inbound_token.get_secret_value() if subject.inbound_token else None)
+                return Ok(StaticHeaderAuth("Bearer MINTED", header_name="Authorization"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = self._token_exchange_server("te-preflight-ok")
+
+        assert (
+            await manager.preflight_token_exchange(
+                server=server,
+                oauth2_headers={"Authorization": "Bearer good-subject"},
+                user_api_key_auth=None,
+            )
+            is None
+        )
+        assert resolved == ["good-subject"]
+
+        await manager.preflight_token_exchange(server=server, oauth2_headers=None, user_api_key_auth=None)
+        assert resolved == ["good-subject"]
+
     @pytest.mark.asyncio
     async def test_call_regular_mcp_tool_passthrough_strips_authorization_when_admission_consumed_litellm_key(
         self,
@@ -995,6 +1323,7 @@ class TestMCPServerManager:
             mcp_auth_header="auth",
             extra_headers=None,
             stdio_env=None,
+            subject_token=None,
         )
         mock_client.list_resource_templates.assert_awaited_once()
         mock_prefix.assert_called_once_with(mock_templates, server, add_prefix=False)
@@ -1260,8 +1589,10 @@ class TestMCPServerManager:
             registration_url="https://discovered.example.com/register",
         )
 
-        async def fake_discovery(server_url: str):
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
             assert server_url == "https://example.com/mcp"
+            # oauth2 (browser flow) keeps the origin fallback; only OBO disables it.
+            assert allow_origin_fallback is True
             return discovered_metadata
 
         manager._descovery_metadata = fake_discovery  # type: ignore[attr-defined]
@@ -3078,6 +3409,244 @@ class TestMCPServerManager:
         mock_inner.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_no_mcp_servers_sentinel_excludes_submitted_byom_servers(self):
+        from litellm.proxy import proxy_server as proxy_server_module
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+
+        class _Cache:
+            async def async_get_cache(self, key: str):
+                return ["submitted-server"]
+
+        manager = MCPServerManager()
+        manager.registry = {
+            "submitted-server": MCPServer(
+                server_id="submitted-server",
+                name="submitted",
+                transport=MCPTransport.http,
+            )
+        }
+        object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm_no_mcp",
+            mcp_servers=["no-mcp-servers"],
+            mcp_access_groups=[],
+        )
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="sk-test",
+            user_id="user-123",
+            object_permission=object_permission,
+            object_permission_id="perm_no_mcp",
+        )
+
+        with (
+            patch.object(proxy_server_module, "user_api_key_cache", _Cache()),
+            patch.object(proxy_server_module, "prisma_client", None),
+            patch.object(manager, "get_allow_all_keys_server_ids", return_value=["global-server"]),
+            patch.object(
+                MCPRequestHandler,
+                "get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=["leaked-server"],
+            ) as mock_inner,
+        ):
+            result = await manager.get_allowed_mcp_servers(user_api_key_auth)
+
+        assert result == []
+        mock_inner.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_explicitly_scoped_key_excludes_submitted_byom_servers(self):
+        from litellm.proxy import proxy_server as proxy_server_module
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+
+        cache = MagicMock()
+        cache.async_get_cache = AsyncMock(return_value=["submitted-server"])
+
+        manager = MCPServerManager()
+        manager.registry = {
+            "submitted-server": MCPServer(
+                server_id="submitted-server",
+                name="submitted",
+                transport=MCPTransport.http,
+            ),
+            "scoped-server": MCPServer(
+                server_id="scoped-server",
+                name="scoped",
+                transport=MCPTransport.http,
+            ),
+        }
+        object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm_scoped",
+            mcp_servers=["scoped-server"],
+            mcp_access_groups=[],
+        )
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="sk-test",
+            user_id="user-123",
+            object_permission=object_permission,
+            object_permission_id="perm_scoped",
+        )
+
+        with (
+            patch.object(proxy_server_module, "user_api_key_cache", cache),
+            patch.object(proxy_server_module, "prisma_client", None),
+            patch.object(manager, "get_allow_all_keys_server_ids", return_value=[]),
+            patch.object(
+                MCPRequestHandler,
+                "get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=["scoped-server"],
+            ),
+        ):
+            result = await manager.get_allowed_mcp_servers(user_api_key_auth)
+
+        assert result == ["scoped-server"]
+        cache.async_get_cache.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_toolset_scope_excludes_submitted_byom_servers(self):
+        from litellm.proxy import proxy_server as proxy_server_module
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_context import (
+            _mcp_active_toolset_id,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        cache = MagicMock()
+        cache.async_get_cache = AsyncMock(return_value=["submitted-server"])
+
+        manager = MCPServerManager()
+        manager.registry = {
+            "submitted-server": MCPServer(
+                server_id="submitted-server",
+                name="submitted",
+                transport=MCPTransport.http,
+            ),
+            "toolset-server": MCPServer(
+                server_id="toolset-server",
+                name="toolset",
+                transport=MCPTransport.http,
+            ),
+        }
+        user_api_key_auth = UserAPIKeyAuth(api_key="sk-test", user_id="user-123")
+
+        token = _mcp_active_toolset_id.set("toolset-abc")
+        try:
+            with (
+                patch.object(proxy_server_module, "user_api_key_cache", cache),
+                patch.object(proxy_server_module, "prisma_client", None),
+                patch.object(manager, "get_allow_all_keys_server_ids", return_value=["global-server"]),
+                patch.object(
+                    MCPRequestHandler,
+                    "get_allowed_mcp_servers",
+                    new_callable=AsyncMock,
+                    return_value=["toolset-server"],
+                ),
+            ):
+                result = await manager.get_allowed_mcp_servers(user_api_key_auth)
+        finally:
+            _mcp_active_toolset_id.reset(token)
+
+        assert result == ["toolset-server"]
+
+    @pytest.mark.asyncio
+    async def test_invalidate_byom_submitted_servers_cache_deletes_key(self):
+        from litellm.proxy import proxy_server as proxy_server_module
+
+        cache = MagicMock()
+        cache.async_delete_cache = AsyncMock()
+        manager = MCPServerManager()
+
+        with patch.object(proxy_server_module, "user_api_key_cache", cache):
+            await manager.invalidate_byom_submitted_servers_cache("user-123")
+            await manager.invalidate_byom_submitted_servers_cache(None)
+
+        cache.async_delete_cache.assert_awaited_once_with(key="byom_submitted_servers:user-123")
+
+    @pytest.mark.asyncio
+    async def test_get_active_submitted_ids_cache_miss_queries_db_and_caches(self):
+        from litellm.proxy import proxy_server as proxy_server_module
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        cache = MagicMock()
+        cache.async_get_cache = AsyncMock(return_value=None)
+        cache.async_set_cache = AsyncMock()
+        manager = MCPServerManager()
+        manager.registry = {
+            "submitted-server": MCPServer(
+                server_id="submitted-server",
+                name="submitted",
+                transport=MCPTransport.http,
+            )
+        }
+        user_api_key_auth = UserAPIKeyAuth(api_key="sk-test", user_id="user-123")
+
+        with (
+            patch.object(proxy_server_module, "user_api_key_cache", cache),
+            patch.object(proxy_server_module, "prisma_client", MagicMock()),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.get_active_submitted_mcp_server_ids_for_user",
+                AsyncMock(return_value=["submitted-server", "unknown-server"]),
+            ),
+        ):
+            result = await manager._get_active_submitted_mcp_server_ids_for_user(user_api_key_auth)
+
+        assert result == ["submitted-server"]
+        cache.async_set_cache.assert_awaited_once_with(
+            key="byom_submitted_servers:user-123",
+            value=["submitted-server", "unknown-server"],
+            ttl=60,
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_allowed_mcp_servers_fallback_keeps_submitted_byom_servers(self):
+        from litellm.proxy import proxy_server as proxy_server_module
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        class _Cache:
+            async def async_get_cache(self, key: str):
+                assert key == "byom_submitted_servers:user-123"
+                return ["submitted-server"]
+
+        manager = MCPServerManager()
+        manager.registry = {
+            "submitted-server": MCPServer(
+                server_id="submitted-server",
+                name="submitted",
+                transport=MCPTransport.http,
+            )
+        }
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="sk-test",
+            user_id="user-123",
+        )
+
+        with (
+            patch.object(proxy_server_module, "user_api_key_cache", _Cache()),
+            patch.object(proxy_server_module, "prisma_client", None),
+            patch.object(manager, "get_allow_all_keys_server_ids", return_value=["global-server"]),
+            patch.object(
+                MCPRequestHandler,
+                "get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("permission resolver failed"),
+            ),
+        ):
+            result = await manager.get_allowed_mcp_servers(user_api_key_auth)
+
+        assert set(result) == {"global-server", "submitted-server"}
+
+    @pytest.mark.asyncio
     async def test_get_allowed_mcp_servers_anonymous_delegate_requires_oauth2(self):
         """Anonymous delegated auth listing should only include oauth2 servers."""
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
@@ -3217,6 +3786,180 @@ class TestMCPServerTimestamps:
         )
         default_server = await manager.build_mcp_server_from_table(default_record, credentials_are_encrypted=False)
         assert default_server.token_endpoint_auth_method is None
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_discovers_obo_token_url_when_unset(self):
+        """DB path: an OBO server with no token_exchange_endpoint in credentials and no token_url
+        column runs discovery, and the resolved endpoint lands on the returned MCPServer."""
+        manager = MCPServerManager()
+        calls: list[bool] = []
+
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
+            calls.append(allow_origin_fallback)
+            return MCPOAuthMetadata(
+                scopes=None,
+                authorization_url=None,
+                token_url="https://discovered.example.com/token",
+                registration_url=None,
+            )
+
+        manager._descovery_metadata = fake_discovery  # type: ignore[attr-defined]
+
+        record = LiteLLM_MCPServerTable(
+            server_id="obo-discover-db-1",
+            server_name="obo_discover_db",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            credentials={"client_id": "cid", "client_secret": "csec"},
+        )
+
+        # prisma_client None -> the write-back no-ops; this test isolates the discovery behavior.
+        with patch("litellm.proxy.proxy_server.prisma_client", None):
+            server = await manager.build_mcp_server_from_table(record, credentials_are_encrypted=False)
+
+        assert calls == [False]  # discovery ran once, origin fallback disabled for OBO
+        assert server.token_url == "https://discovered.example.com/token"
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_skips_discovery_when_obo_endpoint_configured(self):
+        """DB path: a configured token_exchange_endpoint in the credentials JSON wins and skips
+        discovery entirely, even though the token_url column is empty (the DB-specific lookup uses
+        credentials_dict["token_exchange_endpoint"], not the column)."""
+        manager = MCPServerManager()
+        calls: list[str] = []
+
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
+            calls.append(server_url)
+            raise AssertionError("discovery must not run when token_exchange_endpoint is configured")
+
+        manager._descovery_metadata = fake_discovery  # type: ignore[attr-defined]
+
+        record = LiteLLM_MCPServerTable(
+            server_id="obo-configured-db-1",
+            server_name="obo_configured_db",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            credentials={
+                "client_id": "cid",
+                "client_secret": "csec",
+                "token_exchange_endpoint": "https://idp.example.com/token",
+            },
+        )
+
+        server = await manager.build_mcp_server_from_table(record, credentials_are_encrypted=False)
+
+        assert calls == []  # discovery never ran
+        assert server.token_exchange_endpoint == "https://idp.example.com/token"
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_persists_discovered_obo_token_url(self):
+        """A DB-backed OBO server with no configured endpoint discovers token_url and must write it
+        back to the row, so the next rebuild skips discovery instead of re-running it every time."""
+        manager = MCPServerManager()
+
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
+            assert server_url == "https://example.com/mcp"
+            assert allow_origin_fallback is False  # OBO never guesses the origin
+            return MCPOAuthMetadata(
+                scopes=None,
+                authorization_url=None,
+                token_url="https://discovered.example.com/token",
+                registration_url=None,
+            )
+
+        manager._descovery_metadata = fake_discovery  # type: ignore[attr-defined]
+
+        record = LiteLLM_MCPServerTable(
+            server_id="obo-persist-1",
+            server_name="obo_persist",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            credentials={"client_id": "cid", "client_secret": "csec", "audience": "aud"},
+        )
+
+        update_mock = AsyncMock()
+        repo_instance = MagicMock()
+        repo_instance.table.update = update_mock
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
+                return_value=repo_instance,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        ):
+            server = await manager.build_mcp_server_from_table(record, credentials_are_encrypted=False)
+
+        assert server.token_url == "https://discovered.example.com/token"
+        update_mock.assert_awaited_once()
+        assert update_mock.call_args.kwargs["where"] == {"server_id": "obo-persist-1"}
+        assert update_mock.call_args.kwargs["data"] == {"token_url": "https://discovered.example.com/token"}
+
+    @pytest.mark.asyncio
+    async def test_persist_discovered_obo_token_url_skips_when_not_needed(self):
+        """The write-back fires only for an OBO server that discovered a new endpoint: a row that
+        already has token_url, a non-OBO auth_type, or a discovery that found nothing all no-op."""
+        manager = MCPServerManager()
+        update_mock = AsyncMock()
+        repo_instance = MagicMock()
+        repo_instance.table.update = update_mock
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
+                return_value=repo_instance,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        ):
+            # already populated -> no write
+            await manager._persist_discovered_obo_token_url(
+                server_id="s",
+                auth_type=MCPAuth.oauth2_token_exchange,
+                existing_token_url="https://already.example.com/token",
+                discovered_token_url="https://new.example.com/token",
+            )
+            # not an OBO server -> no write
+            await manager._persist_discovered_obo_token_url(
+                server_id="s",
+                auth_type=MCPAuth.oauth2,
+                existing_token_url=None,
+                discovered_token_url="https://new.example.com/token",
+            )
+            # discovery found nothing -> no write
+            await manager._persist_discovered_obo_token_url(
+                server_id="s",
+                auth_type=MCPAuth.oauth2_token_exchange,
+                existing_token_url=None,
+                discovered_token_url=None,
+            )
+
+        update_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_persist_discovered_obo_token_url_is_best_effort(self):
+        """A write-back failure must not propagate; discovery just re-runs on the next build."""
+        manager = MCPServerManager()
+        update_mock = AsyncMock(side_effect=Exception("db unavailable"))
+        repo_instance = MagicMock()
+        repo_instance.table.update = update_mock
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
+                return_value=repo_instance,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        ):
+            await manager._persist_discovered_obo_token_url(
+                server_id="s",
+                auth_type=MCPAuth.oauth2_token_exchange,
+                existing_token_url=None,
+                discovered_token_url="https://new.example.com/token",
+            )
+
+        update_mock.assert_awaited_once()
 
     def test_build_mcp_server_table_preserves_timestamps(self):
         """_build_mcp_server_table must use the MCPServer's stored timestamps, not datetime.now()."""
@@ -4873,11 +5616,13 @@ class TestMCPToolsListAuthSurfacing:
 
     @pytest.mark.asyncio
     async def test_get_tools_from_server_absorbs_non_challenge_http_error(self):
+        """A non-auth HTTPException (500) stays absorbed so one misconfigured server cannot blank
+        the listing; 401/403 are the challenge-class statuses routed to MCPUpstreamAuthError."""
         manager = MCPServerManager()
         server = MCPServer(server_id="stdio-srv", name="stdio-srv", transport=MCPTransport.http)
         manager._create_mcp_client = AsyncMock(
             side_effect=HTTPException(
-                status_code=403,
+                status_code=500,
                 detail="MCP stdio command 'foo' is not in the allowlist",
             )
         )
@@ -4913,6 +5658,257 @@ class TestMCPToolsListAuthSurfacing:
         result = await manager.list_tools()
 
         assert [t.name for t in result] == ["good-do_thing"]
+
+
+def test_should_strip_caller_authorization_for_token_exchange():
+    """OBO: the inbound bearer is the subject token (exchanged), never forwarded upstream raw."""
+    server = MCPServer(
+        server_id="te-strip",
+        name="te-strip-server",
+        url="https://up.example.com",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2_token_exchange,
+        token_exchange_endpoint="https://idp.example.com/token",
+        client_id="cid",
+        client_secret="csec",
+    )
+    assert _should_strip_caller_authorization(mcp_server=server, raw_headers=None, user_api_key_auth=None) is True
+
+
+class _UpstreamAuthError(Exception):
+    """Mimics a wrapped upstream 401 the way _extract_upstream_auth_failure detects it."""
+
+    def __init__(self, status_code: int = 401) -> None:
+        super().__init__(f"HTTP {status_code}")
+        self.response = httpx.Response(status_code)
+
+
+class _RetryFakeClient:
+    """A fake MCPClient whose call_tool fails on the first attempt and (optionally) succeeds after."""
+
+    def __init__(self, *, raises=None, result=None) -> None:
+        from litellm.experimental_mcp_client.client import MCPClient
+
+        self._raises = raises
+        self._result = result
+        self._MCPClient = MCPClient
+        self.attempts = 0
+
+    async def call_tool(self, params, host_progress_callback=None, raise_on_error=False):
+        self.attempts += 1
+        if self._raises is not None:
+            if raise_on_error:
+                raise self._raises
+            return self._MCPClient.error_tool_result(self._raises)
+        return self._result
+
+
+def _obo_server() -> MCPServer:
+    return MCPServer(
+        server_id="obo-srv",
+        name="obo",
+        url="https://upstream.example/mcp",
+        transport=MCPTransport.sse,
+        auth_type=MCPAuth.oauth2_token_exchange,
+        token_exchange_endpoint="https://idp.example.com/token",
+        client_id="cid",
+        client_secret="csec",
+    )
+
+
+class TestOBOCallToolRetry:
+    """The token_exchange (OBO) tool-call path re-mints the exchanged token once on an upstream 401."""
+
+    def _manager(self):
+        manager = MCPServerManager()
+        manager._cred_provider = MagicMock()
+        manager._cred_provider.invalidate_credentials = AsyncMock()
+        return manager
+
+    @pytest.mark.asyncio
+    async def test_upstream_401_invalidates_and_retries_once(self):
+        manager = self._manager()
+        success = CallToolResult(content=[], isError=False)
+        first = _RetryFakeClient(raises=_UpstreamAuthError(401))
+        retry = _RetryFakeClient(result=success)
+        manager._create_mcp_client = AsyncMock(return_value=retry)
+
+        result = await manager._obo_call_tool_with_retry(
+            client=first,
+            call_tool_params=MagicMock(),
+            host_progress_callback=None,
+            mcp_server=_obo_server(),
+            server_auth_header=None,
+            extra_headers=None,
+            stdio_env=None,
+            subject_token="caller-jwt",
+            user_api_key_auth=None,
+        )
+
+        assert result is success
+        manager._cred_provider.invalidate_credentials.assert_awaited_once()
+        manager._create_mcp_client.assert_awaited_once()
+        assert first.attempts == 1 and retry.attempts == 1
+
+    @pytest.mark.asyncio
+    async def test_non_auth_error_does_not_retry(self):
+        manager = self._manager()
+        first = _RetryFakeClient(raises=ValueError("tool blew up"))
+        manager._create_mcp_client = AsyncMock()
+
+        result = await manager._obo_call_tool_with_retry(
+            client=first,
+            call_tool_params=MagicMock(),
+            host_progress_callback=None,
+            mcp_server=_obo_server(),
+            server_auth_header=None,
+            extra_headers=None,
+            stdio_env=None,
+            subject_token="caller-jwt",
+            user_api_key_auth=None,
+        )
+
+        assert result.isError is True
+        manager._cred_provider.invalidate_credentials.assert_not_awaited()
+        manager._create_mcp_client.assert_not_awaited()
+        assert first.attempts == 1
+
+    @pytest.mark.asyncio
+    async def test_second_401_degrades_without_looping(self):
+        manager = self._manager()
+        first = _RetryFakeClient(raises=_UpstreamAuthError(401))
+        # The retry client still fails; with raise_on_error defaulting False it returns isError.
+        retry = _RetryFakeClient(raises=_UpstreamAuthError(401))
+        manager._create_mcp_client = AsyncMock(return_value=retry)
+
+        result = await manager._obo_call_tool_with_retry(
+            client=first,
+            call_tool_params=MagicMock(),
+            host_progress_callback=None,
+            mcp_server=_obo_server(),
+            server_auth_header=None,
+            extra_headers=None,
+            stdio_env=None,
+            subject_token="caller-jwt",
+            user_api_key_auth=None,
+        )
+
+        assert result.isError is True
+        manager._create_mcp_client.assert_awaited_once()
+        assert first.attempts == 1 and retry.attempts == 1
+
+
+class TestOBOEndpointDiscovery:
+    """An oauth2_token_exchange server with no configured token endpoint discovers it (RFC 9728 ->
+    RFC 8414) like the oauth2 flow does; an explicitly configured endpoint skips discovery."""
+
+    @pytest.mark.parametrize(
+        "auth_type, endpoint, token_url, expected",
+        [
+            (MCPAuth.oauth2_token_exchange, None, None, True),  # OBO, nothing configured -> discover
+            (MCPAuth.oauth2_token_exchange, "https://idp/token", None, False),  # endpoint set -> skip
+            (MCPAuth.oauth2_token_exchange, None, "https://idp/token", False),  # token_url set -> skip
+            (MCPAuth.oauth2, None, None, False),  # not OBO
+            (MCPAuth.none, None, None, False),
+            (None, None, None, False),
+        ],
+    )
+    def test_decision(self, auth_type, endpoint, token_url, expected):
+        assert MCPServerManager._obo_needs_endpoint_discovery(auth_type, endpoint, token_url) is expected
+
+    @pytest.mark.asyncio
+    async def test_config_obo_without_endpoint_discovers_token_endpoint(self):
+        manager = MCPServerManager()
+        discovered = MCPOAuthMetadata(
+            scopes=None,
+            authorization_url=None,
+            token_url="https://discovered.example.com/token",
+            registration_url=None,
+        )
+        seen = []
+
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
+            seen.append((server_url, allow_origin_fallback))
+            return discovered
+
+        manager._descovery_metadata = fake_discovery  # type: ignore[attr-defined]
+
+        await manager.load_servers_from_config(
+            {
+                "obo": {
+                    "url": "https://example.com/mcp",
+                    "transport": MCPTransport.http,
+                    "auth_type": MCPAuth.oauth2_token_exchange,
+                    "client_id": "cid",
+                    "client_secret": "csec",
+                }
+            }
+        )
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        # OBO discovery runs, and never guesses the resource origin as the IdP (origin fallback off).
+        assert seen == [("https://example.com/mcp", False)]
+        # The discovered token endpoint lands on token_url, which _token_exchange_spec reads.
+        assert server.token_url == "https://discovered.example.com/token"
+
+    @pytest.mark.asyncio
+    async def test_config_obo_with_configured_endpoint_skips_discovery(self):
+        manager = MCPServerManager()
+
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
+            raise AssertionError("discovery must not run when the endpoint is configured")
+
+        manager._descovery_metadata = fake_discovery  # type: ignore[attr-defined]
+
+        await manager.load_servers_from_config(
+            {
+                "obo": {
+                    "url": "https://example.com/mcp",
+                    "transport": MCPTransport.http,
+                    "auth_type": MCPAuth.oauth2_token_exchange,
+                    "token_exchange_endpoint": "https://configured.example.com/token",
+                    "client_id": "cid",
+                    "client_secret": "csec",
+                }
+            }
+        )
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.token_exchange_endpoint == "https://configured.example.com/token"
+
+    @pytest.mark.asyncio
+    async def test_descovery_metadata_does_not_guess_origin_when_disallowed(self):
+        # The authoritative RFC 9728 -> RFC 8414 chain stays, but with allow_origin_fallback=False the
+        # resource origin is never assumed to be the IdP, so no token endpoint is invented.
+        manager = MCPServerManager()
+        server_url = "https://example.com/public/mcp"
+        request = httpx.Request("GET", server_url)
+        response_obj = httpx.Response(
+            status_code=401, request=request, headers={"WWW-Authenticate": 'Bearer scope="read"'}
+        )
+        response_obj.raise_for_status = MagicMock(
+            side_effect=lambda: (_ for _ in ()).throw(
+                httpx.HTTPStatusError("unauthorized", request=request, response=response_obj)
+            )
+        )
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=response_obj)
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+                return_value=mock_client,
+            ),
+            patch.object(manager, "_fetch_oauth_metadata_from_resource", AsyncMock(return_value=([], None))),
+            patch.object(manager, "_attempt_well_known_discovery", AsyncMock(return_value=([], None))),
+            patch.object(manager, "_fetch_authorization_server_metadata", AsyncMock()) as mock_fetch_auth,
+        ):
+            result = await manager._descovery_metadata(server_url, allow_origin_fallback=False)
+
+        # No advertised AS -> with the guess disabled, the AS-metadata fetch is never attempted, so no
+        # token endpoint is discovered (only the scopes parsed from the challenge survive).
+        mock_fetch_auth.assert_not_awaited()
+        assert result is None or result.token_url is None
 
 
 if __name__ == "__main__":

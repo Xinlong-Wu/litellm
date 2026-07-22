@@ -37,12 +37,14 @@ __all__ = [
     "LLMCost",
     "LLMRequestParams",
     "LLMUsage",
+    "MCPListToolsSpanData",
     "MCPToolCallSpanData",
     "ProxyRequestSpanData",
     "ServerInfo",
     "ServiceSpanData",
     "SpanError",
     "ToolDefinition",
+    "is_mcp_list_tools",
     "is_mcp_tool_call",
 ]
 
@@ -306,10 +308,14 @@ class LLMCallSpanData:
     messages_in: tuple[Mapping[str, object], ...] = ()
     choices_out: tuple[Mapping[str, object], ...] = ()
     system_fingerprint: str | None = None
+    time_to_first_chunk_seconds: float | None = None
 
     @classmethod
     def from_standard_logging_payload(
-        cls, payload: "StandardLoggingPayload", capture_content: bool = False
+        cls,
+        payload: "StandardLoggingPayload",
+        capture_content: bool = False,
+        time_to_first_chunk_seconds: float | None = None,
     ) -> "LLMCallSpanData":
         params = cast(Mapping[str, object], payload.get("model_parameters") or {})
         # The single parse of the request's metadata — the request-vs-provider
@@ -350,6 +356,7 @@ class LLMCallSpanData:
             messages_in=_dicts(payload.get("messages")) if capture_content else (),
             choices_out=choices_out if capture_content else (),
             system_fingerprint=as_str(response.get("system_fingerprint")),
+            time_to_first_chunk_seconds=time_to_first_chunk_seconds,
         )
 
 
@@ -416,6 +423,42 @@ def is_mcp_tool_call(payload: Mapping[str, object]) -> bool:
     call — true when the MCP gateway stamped its tool-call metadata, or the call
     type says so on a path that hasn't populated the metadata yet."""
     return bool(_mcp_tool_call_metadata(payload)) or (payload.get("call_type") == "call_mcp_tool")
+
+
+@dataclass(frozen=True)
+class MCPListToolsSpanData:
+    """One MCP ``tools/list`` discovery call, parsed from a closed request's payload.
+
+    The proxy is an MCP *client* enumerating an upstream server's tools, so this is
+    a CLIENT span. It carries neither ``gen_ai.operation.name`` nor ``gen_ai.tool.name``:
+    the GenAI semconv sets ``execute_tool`` (and the tool name) only for tool *calls*,
+    and listing executes no tool.
+    """
+
+    method: str
+    session_id: str | None
+    error: SpanError | None
+    identity: RequestIdentity
+
+    @classmethod
+    def from_standard_logging_payload(
+        cls, payload: StandardLoggingPayload, capture_content: bool = False
+    ) -> MCPListToolsSpanData:
+        # The list-tools logging path does not thread an MCP session id into the
+        # payload (only the tool-call path stamps ``mcp_tool_call_metadata``), so
+        # there is none to read here; ``mcp.session.id`` is simply omitted.
+        return cls(
+            method=MCPMethod.TOOLS_LIST.value,
+            session_id=None,
+            error=_parse_error(payload),
+            identity=RequestContext.from_standard_logging_payload(payload).identity,
+        )
+
+
+def is_mcp_list_tools(payload: Mapping[str, object]) -> bool:
+    """Whether a closed request's payload is an MCP ``tools/list`` discovery call
+    rather than a tool call or an LLM call — true when the call type says so."""
+    return payload.get("call_type") == "list_mcp_tools"
 
 
 # --- service event_metadata sanitization ------------------------------------ #

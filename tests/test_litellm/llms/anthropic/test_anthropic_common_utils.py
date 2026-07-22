@@ -1579,7 +1579,7 @@ class TestClaudeOpus48AdaptiveThinking:
     def test_adaptive_thinking_detected_for_opus_4_8(self, local_model_cost_map, model):
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model) is True
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
 
     def test_resolver_reads_flag_through_bedrock_invoke_prefix(
         self, local_model_cost_map
@@ -1593,6 +1593,7 @@ class TestClaudeOpus48AdaptiveThinking:
             AnthropicModelInfo._supports_model_capability(
                 "bedrock/invoke/us.anthropic.claude-opus-4-8",
                 "supports_adaptive_thinking",
+                "anthropic",
             )
             is True
         )
@@ -1610,7 +1611,7 @@ class TestClaudeOpus48AdaptiveThinking:
     def test_adaptive_thinking_detected_for_fable_5(self, local_model_cost_map, model):
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model) is True
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
 
     @pytest.mark.parametrize(
         "model",
@@ -1636,7 +1637,7 @@ class TestClaudeOpus48AdaptiveThinking:
         self, local_model_cost_map, model
     ):
         """Opus 4.6/4.7 and Sonnet 4.6 carry the ``supports_adaptive_thinking`` flag,
-        so detection holds purely from the cost map with no name-based version
+        so detection holds purely from the cost map with no version-rule
         fallback. Each alias form the Bedrock/anthropic paths see resolves to a flagged
         base entry through candidate normalization: provider/region prefixes, a
         Bedrock ``-v1:0`` version suffix (stripped fully for 4.7/4.8 keys or to ``-v1``
@@ -1645,25 +1646,79 @@ class TestClaudeOpus48AdaptiveThinking:
         version (``4.6`` -> ``4-6``)."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model) is True
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
 
     @pytest.mark.parametrize(
         "model",
         [
-            "claude-opus-4-9",
-            "claude-opus-4-8-some-future-suffix",
-            "us.anthropic.claude-fable-5-preview",
+            "us.anthropic.claude-fable-preview",
+            "claude-fable-preview",
         ],
     )
-    def test_unmapped_aliases_defer_to_cost_map(self, local_model_cost_map, model):
-        """Detection is sourced solely from the cost map flag: an alias absent from
-        the map (a future release or a preview suffix) is not adaptive until a
-        ``fallback_generalizations`` rule (PR #29718) covers it."""
+    def test_unmapped_aliases_without_parseable_version_stay_non_adaptive(
+        self, local_model_cost_map, model
+    ):
+        """An alias absent from the map, not matched by any ``fallback_generalizations``
+        rule, and without any parseable family version stays non-adaptive. ``fable``
+        without a major version matches neither the core-family 4.6+ gate nor the
+        family-agnostic 5+ gate, so neither the cost map nor the declarative rule marks
+        it adaptive."""
         import litellm
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         assert model not in litellm.model_cost
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model) is False
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is False
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "bedrock/invoke/us.anthropic.claude-opus-4-9",
+            "vertex_ai/claude-sonnet-5-0",
+            "us.anthropic.claude-opus-5-2",
+            "us.anthropic.claude-opus-6-1",
+            "claude-opus-5-0",
+            "claude-opus-4-10",
+            "claude-opus-4-8-some-future-suffix",
+            "claude-fable-5-preview",
+            "us.anthropic.claude-fable-5-preview",
+        ],
+    )
+    def test_adaptive_thinking_version_fallback_for_unmapped_high_versions(
+        self, local_model_cost_map, model
+    ):
+        """Provider-prefixed or suffixed Claude names that resolve to no mapped entry
+        still resolve to adaptive when the id carries claude-<family>- at version 4.6
+        or higher, bare 5+ majors included. The version gate is the declarative
+        ``claude-adaptive-thinking`` rule, so 5.x, 6.x and any later family are covered
+        with no code change."""
+        import litellm
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert model not in litellm.model_cost
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "claude-opus-4-0",
+            "us.anthropic.claude-opus-4-0",
+            "bedrock/invoke/us.anthropic.claude-opus-4-5",
+            "us.anthropic.claude-opus-4-20250514",
+        ],
+    )
+    def test_adaptive_thinking_not_detected_for_unmapped_low_versions(
+        self, local_model_cost_map, model
+    ):
+        """Unmapped Claude names below 4.6 stay non-adaptive through the declarative path.
+        The eight-digit dated Opus 4.0 id (``...-4-20250514``) is the date-safety case: the
+        version rule caps the minor at two digits, so the date is not misread as a >= 4.6
+        minor. The anchored pricing rule still resolves these for cost, just without the
+        adaptive flag."""
+        import litellm
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert model not in litellm.model_cost
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is False
 
     @pytest.mark.parametrize(
         "model",
@@ -1672,4 +1727,52 @@ class TestClaudeOpus48AdaptiveThinking:
     def test_non_adaptive_models_not_detected(self, local_model_cost_map, model):
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model) is False
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is False
+
+
+class TestCapabilityProbeUsesCallerProvider:
+    """``_supports_model_capability`` must probe under the caller's real provider
+    namespace instead of a pinned ``"anthropic"``. With the pin, the exact Bedrock
+    cost-map entry for ``global.anthropic.claude-opus-4-8`` was rejected by the
+    provider match and the anthropic-scoped fallback rule answered instead, so
+    flipping ``supports_adaptive_thinking`` on the exact entry changed nothing and
+    the documented "exact entry beats rule" precedence was silently violated."""
+
+    BEDROCK_MODEL = "global.anthropic.claude-opus-4-8"
+
+    def test_exact_bedrock_entry_flag_is_authoritative_for_bedrock_caller(
+        self, local_model_cost_map, monkeypatch
+    ):
+        import litellm
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert (
+            AnthropicModelInfo._is_adaptive_thinking_model(self.BEDROCK_MODEL, "bedrock")
+            is True
+        )
+
+        monkeypatch.setitem(
+            litellm.model_cost[self.BEDROCK_MODEL], "supports_adaptive_thinking", False
+        )
+        litellm.get_model_info.cache_clear()
+
+        assert (
+            AnthropicModelInfo._is_adaptive_thinking_model(self.BEDROCK_MODEL, "bedrock")
+            is False
+        )
+
+    def test_native_anthropic_probe_still_reads_anthropic_entry(
+        self, local_model_cost_map, monkeypatch
+    ):
+        import litellm
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        monkeypatch.setitem(
+            litellm.model_cost[self.BEDROCK_MODEL], "supports_adaptive_thinking", False
+        )
+        litellm.get_model_info.cache_clear()
+
+        assert (
+            AnthropicModelInfo._is_adaptive_thinking_model("claude-opus-4-8", "anthropic")
+            is True
+        )

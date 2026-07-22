@@ -96,9 +96,7 @@ const ModelGroupBudgetEditor: React.FC<ModelGroupBudgetEditorProps> = ({ value, 
 
   return (
     <div>
-      {rows.length === 0 && (
-        <Text className="text-xs text-gray-500 mb-2">No model group budgets set.</Text>
-      )}
+      {rows.length === 0 && <Text className="text-xs text-gray-500 mb-2">No model group budgets set.</Text>}
       {rows.map((row, index) => (
         <Space key={index} align="baseline" className="mb-2" style={{ display: "flex" }}>
           <Select
@@ -151,19 +149,10 @@ const ModelGroupBudgetEditor: React.FC<ModelGroupBudgetEditorProps> = ({ value, 
               updateRow(index, { rpm_limit: raw === "" ? undefined : Number(raw) });
             }}
           />
-          <Button
-            type="text"
-            icon={<DeleteOutlined />}
-            onClick={() => emit(rows.filter((_, i) => i !== index))}
-          />
+          <Button type="text" icon={<DeleteOutlined />} onClick={() => emit(rows.filter((_, i) => i !== index))} />
         </Space>
       ))}
-      <Button
-        type="dashed"
-        icon={<PlusOutlined />}
-        onClick={() => emit([...rows, {}])}
-        style={{ width: "100%" }}
-      >
+      <Button type="dashed" icon={<PlusOutlined />} onClick={() => emit([...rows, {}])} style={{ width: "100%" }}>
         Add model group budget
       </Button>
     </div>

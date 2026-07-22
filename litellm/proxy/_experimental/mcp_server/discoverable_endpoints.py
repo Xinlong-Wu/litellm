@@ -2,6 +2,7 @@ import asyncio
 import html as _html
 import json
 import time
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -35,7 +36,7 @@ from litellm.types.mcp import MCPAuth, MCPCredentials
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 if TYPE_CHECKING:
-    from litellm.proxy._types import LiteLLM_MCPServerTable
+    from litellm.proxy._types import LiteLLM_MCPServerTable, UserAPIKeyAuth
 
 # TTL cache for upstream OAuth metadata fetched from pass-through MCP servers.
 # Keeps us from hammering the upstream IdP on each discovery request.
@@ -236,28 +237,87 @@ def _validate_token_response(
             )
 
 
-async def _extract_user_id_from_request(request: Request) -> Optional[str]:
-    """Best-effort extraction of LiteLLM user_id from the request's Authorization header.
+def _litellm_key_from_request(request: Request) -> Optional[str]:
+    """Return the LiteLLM API key presented on the request, or ``None``.
 
-    Called at the OAuth token endpoint so that per-user tokens can be stored
-    server-side.  Uses a read-only cache lookup to avoid re-running the full
-    auth pipeline (which has side effects such as rate-limit increments and
-    spend logging).  Returns ``None`` if no cached credential is found.
+    Accepts the key from ``x-litellm-api-key`` (what MCP clients such as Claude Desktop/Code
+    send) as well as ``Authorization``; either may carry a bare token or ``Bearer <token>``.
+    ``x-litellm-api-key`` wins when both are present, since ``Authorization`` may instead carry
+    an OAuth/upstream bearer.
     """
-    auth_header = request.headers.get("Authorization") or request.headers.get("authorization")
-    if not auth_header:
+    for header_value in (
+        request.headers.get("x-litellm-api-key"),
+        request.headers.get("Authorization") or request.headers.get("authorization"),
+    ):
+        if not header_value:
+            continue
+        value = header_value.strip()
+        if value.lower().startswith("bearer "):
+            value = value[7:].strip()
+        if value:
+            return value
+    return None
+
+
+def _active_key_user_id(key_obj: "UserAPIKeyAuth") -> Optional[str]:
+    """The key's ``user_id``, or ``None`` if the key is blocked or expired.
+
+    The OAuth token endpoint is unauthenticated, so the presented key is validated here before its
+    identity is trusted to key a stored credential; a revoked or expired key must not be able to
+    write or overwrite the per-user OAuth token. ``get_key_object`` resolves a row without these
+    checks (the main ``user_api_key_auth`` pipeline enforces them downstream, which this endpoint
+    bypasses), so they are applied here. Deleted keys are already rejected upstream, where
+    ``get_key_object`` raises on a row that no longer exists.
+    """
+    if key_obj.blocked is True:
         return None
-    lower = auth_header.lower()
-    if not lower.startswith("bearer "):
+    expires = key_obj.expires
+    if expires is not None:
+        expiry = expires if isinstance(expires, datetime) else datetime.fromisoformat(expires)
+        if expiry.tzinfo is None or expiry.tzinfo.utcoffset(expiry) is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        if expiry < datetime.now(timezone.utc):
+            return None
+    return key_obj.user_id
+
+
+async def _extract_user_id_from_request(request: Request) -> Optional[str]:
+    """Resolve the LiteLLM ``user_id`` at the OAuth token endpoint so a per-user token is stored
+    under the same identity the egress later reads it by (``user_api_key_auth.user_id``).
+
+    Resolves authoritatively via ``get_key_object`` (cache first, then DB) instead of a raw cache
+    peek. On a multi-replica gateway the token-exchange request can land on a worker whose in-memory
+    cache never saw the key, and a cross-replica Redis hit deserializes to a plain ``dict`` rather
+    than a ``UserAPIKeyAuth``; the previous code read only ``Authorization`` and did
+    ``getattr(cached, "user_id")`` with no ``model_type`` rehydration and no DB fallback, so it
+    silently returned ``None`` and the token was never persisted, which makes the egress 401 on every
+    reconnect. The resolved key is validated (``_active_key_user_id``) before its identity is trusted,
+    so a blocked or expired key cannot write. Returns ``None`` when no key is present, the key cannot
+    be resolved, or it is blocked/expired.
+    """
+    token = _litellm_key_from_request(request)
+    if not token:
         return None
-    token = auth_header[7:].strip()
     try:
         from litellm.proxy._types import hash_token  # noqa: PLC0415
-        from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
+        from litellm.proxy.auth.auth_checks import get_key_object  # noqa: PLC0415
+        from litellm.proxy.proxy_server import (  # noqa: PLC0415
+            prisma_client,
+            user_api_key_cache,
+        )
 
-        cached = await user_api_key_cache.async_get_cache(hash_token(token))
-        return getattr(cached, "user_id", None)
-    except Exception:
+        key_obj = await get_key_object(
+            hashed_token=hash_token(token),
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
+        return _active_key_user_id(key_obj)
+    except Exception as exc:
+        verbose_logger.debug(
+            "_extract_user_id_from_request: could not resolve a LiteLLM user_id for the presented "
+            "key (%s); per-user token will not be stored server-side.",
+            type(exc).__name__,
+        )
         return None
 
 
@@ -331,6 +391,46 @@ async def _store_per_user_token_server_side(
     )
 
 
+def _raise_if_not_oauth2(mcp_server: MCPServer) -> None:
+    """Reject a non-oauth2 server from the gateway's OAuth authorize/token/register flow."""
+    if mcp_server.auth_type == MCPAuth.oauth2:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": "server_not_oauth2",
+            "message": (
+                f"MCP server '{mcp_server.server_name or mcp_server.name}' does not use OAuth "
+                f"(auth_type={mcp_server.auth_type}). This server does not support the authorization-code "
+                "flow; it has no client_id, authorize, token, or registration endpoint. "
+                "Access is controlled by the server's configured auth_type and access groups"
+            ),
+        },
+    )
+
+
+def _raise_unless_oauth2_discovery_server(
+    mcp_server: Optional[MCPServer],
+    mcp_server_name: Optional[str],
+    description: str,
+) -> None:
+    """404 a NAMED discovery request unless it resolves to an oauth2 server.
+
+    A named server that is unknown (or hidden from the caller) and one that exists
+    but is non-oauth2 both return the same 404, so the well-known discovery paths
+    cannot be used to enumerate non-OAuth server names. Root discovery (no name) is
+    unaffected, and pass-through servers are resolved by the caller before this runs.
+    """
+    if mcp_server_name is None:
+        return
+    if mcp_server is not None and mcp_server.auth_type == MCPAuth.oauth2:
+        return
+    raise HTTPException(
+        status_code=404,
+        detail=f"MCP server '{mcp_server_name}' is {description}",
+    )
+
+
 async def authorize_with_server(
     request: Request,
     mcp_server: MCPServer,
@@ -398,6 +498,7 @@ async def exchange_token_with_server(
     refresh_token: Optional[str] = None,
     scope: Optional[str] = None,
 ):
+    _raise_if_not_oauth2(mcp_server)
     if grant_type not in ("authorization_code", "refresh_token"):
         raise HTTPException(status_code=400, detail="Unsupported grant_type")
 
@@ -489,11 +590,12 @@ async def exchange_token_with_server(
                     exc,
                 )
         else:
-            verbose_logger.debug(
-                "exchange_token_with_server: no LiteLLM user_id found in request; "
-                "per-user token for server=%s will not be stored server-side. "
-                "The client should call POST /mcp/server/{id}/oauth-user-credential "
-                "to store it manually.",
+            verbose_logger.warning(
+                "exchange_token_with_server: could not resolve a LiteLLM user_id for the request, "
+                "so the per-user token for server=%s was NOT stored. The authorization_code egress "
+                "requires the stored token, so the client will be challenged with 401 on reconnect. "
+                "Ensure the request carries a valid LiteLLM key (x-litellm-api-key or Authorization), "
+                "or store it via POST /mcp/server/{id}/oauth-user-credential.",
                 mcp_server.server_id,
             )
 
@@ -695,6 +797,7 @@ async def register_client_with_server(
     fallback_client_id: Optional[str] = None,
     persist_credentials: bool = False,
 ):
+    _raise_if_not_oauth2(mcp_server)
     request_base_url = get_request_base_url(request)
     dummy_return = {
         "client_id": fallback_client_id or mcp_server.server_name,
@@ -776,6 +879,7 @@ async def authorize(
         mcp_server = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
     if mcp_server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
+    _raise_if_not_oauth2(mcp_server)
     # Use server's stored client_id when caller doesn't supply one.
     # Raise a clear error instead of passing an empty string — an empty
     # client_id would silently produce a broken authorization URL.
@@ -1184,6 +1288,15 @@ async def _build_oauth_protected_resource_response(
             detail=(f"Upstream oauth-protected-resource metadata unavailable for MCP server {mcp_server.name!r}"),
         )
 
+    obo_response = _obo_protected_resource_response(mcp_server, resource_url)
+    if obo_response is not None:
+        return obo_response
+
+    # An OBO server with no configured issuer falls through to the gateway default so discovery still
+    # returns metadata; every other non-oauth2 named server 404s to avoid enumeration.
+    if mcp_server is None or mcp_server.auth_type != MCPAuth.oauth2_token_exchange:
+        _raise_unless_oauth2_discovery_server(mcp_server, mcp_server_name, "not an OAuth-protected resource")
+
     return {
         "authorization_servers": [
             (f"{request_base_url}/{mcp_server_name}" if mcp_server_name else f"{request_base_url}")
@@ -1191,6 +1304,51 @@ async def _build_oauth_protected_resource_response(
         "resource": resource_url,
         "scopes_supported": (mcp_server.scopes if mcp_server and mcp_server.scopes else []),
     }
+
+
+def _obo_protected_resource_response(mcp_server: Optional[MCPServer], resource_url: str) -> Optional[dict]:
+    """The OBO (token_exchange) PRM, or None when this server is not OBO / no issuer is configured.
+
+    The client SSOs with the IdP to obtain a subject token, which LiteLLM then exchanges, so discovery
+    points at the JWT-auth issuer(s) LiteLLM trusts (the same IdP that issues and validates the
+    subject), not the gateway. None falls the caller back to the gateway default so discovery still
+    returns metadata; it just can't name the IdP.
+    """
+    if mcp_server is None or mcp_server.auth_type != MCPAuth.oauth2_token_exchange:
+        return None
+    issuers = _jwt_auth_issuers()
+    if not issuers:
+        return None
+    return {
+        "authorization_servers": issuers,
+        "resource": resource_url,
+        "scopes_supported": (mcp_server.scopes if mcp_server.scopes else []),
+    }
+
+
+def _jwt_auth_issuers() -> list:
+    """The OAuth issuer identifier(s) LiteLLM's JWT auth trusts, for the OBO PRM authorization_servers.
+
+    In token_exchange the IdP that issues the subject JWT is the same one LiteLLM validates it
+    against, so OBO discovery points clients at the JWT-auth issuer to obtain a subject token.
+    Sourced from ``JWT_ISSUER`` and any configured ``litellm_jwtauth.issuers``.
+    """
+    import os  # noqa: PLC0415
+
+    from litellm.proxy.proxy_server import general_settings  # noqa: PLC0415
+
+    issuers: list = []
+    env_issuer = os.getenv("JWT_ISSUER")
+    if env_issuer:
+        issuers.append(env_issuer)
+
+    jwtauth = general_settings.get("litellm_jwtauth") if isinstance(general_settings, dict) else None
+    raw_issuers = jwtauth.get("issuers") if isinstance(jwtauth, dict) else getattr(jwtauth, "issuers", None)
+    for cfg in raw_issuers or []:
+        issuer = cfg.get("issuer") if isinstance(cfg, dict) else getattr(cfg, "issuer", None)
+        if issuer and issuer not in issuers:
+            issuers.append(issuer)
+    return issuers
 
 
 # Standard MCP pattern: /.well-known/oauth-protected-resource/mcp/{server_name}
@@ -1269,6 +1427,8 @@ def _build_oauth_authorization_server_response(
     mcp_server: Optional[MCPServer] = None
     if mcp_server_name:
         mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name, client_ip=client_ip)
+
+    _raise_unless_oauth2_discovery_server(mcp_server, mcp_server_name, "not an OAuth authorization server")
 
     return {
         "issuer": request_base_url,  # point to your proxy

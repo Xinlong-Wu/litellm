@@ -69,6 +69,7 @@ class GenAI:
     RESPONSE_ID: Final = "gen_ai.response.id"
     RESPONSE_MODEL: Final = "gen_ai.response.model"
     RESPONSE_FINISH_REASONS: Final = "gen_ai.response.finish_reasons"
+    RESPONSE_TIME_TO_FIRST_CHUNK: Final = "gen_ai.response.time_to_first_chunk"
     # usage
     USAGE_INPUT_TOKENS: Final = "gen_ai.usage.input_tokens"
     USAGE_OUTPUT_TOKENS: Final = "gen_ai.usage.output_tokens"
@@ -179,6 +180,19 @@ class ExceptionEvent:
     NAME: Final = "exception"
     TYPE: Final = "exception.type"
     MESSAGE: Final = "exception.message"
+    STACKTRACE: Final = "exception.stacktrace"
+
+
+class GenAIEvent:
+    """GenAI semconv event names, from the GenAI registry's *events* section.
+
+    ``gen_ai.client.operation.exception`` is defined as a log-based event
+    (severity WARN) carrying the ``exception.*`` trio, correlated to the failed
+    span via the trace/span ids — the semconv-compliant home for GenAI failure
+    details, unlike the deprecated ``error.message`` span attribute.
+    """
+
+    OPERATION_EXCEPTION: Final = "gen_ai.client.operation.exception"
 
 
 class Server:

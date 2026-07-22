@@ -72,7 +72,11 @@ from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+from litellm.litellm_core_utils.secret_redaction import redact_string
+from litellm.litellm_core_utils.sensitive_data_masker import (
+    SensitiveDataMasker,
+    mask_sensitive_structure,
+)
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
@@ -1114,6 +1118,13 @@ class Router:
         self.adelete_responses = self.factory_function(litellm.adelete_responses, call_type="adelete_responses")
         self.alist_input_items = self.factory_function(litellm.alist_input_items, call_type="alist_input_items")
         self._arealtime = self.factory_function(litellm._arealtime, call_type="_arealtime")
+        self.acreate_realtime_client_secret = self.factory_function(
+            litellm.acreate_realtime_client_secret, call_type="acreate_realtime_client_secret"
+        )
+        self.arealtime_calls = self.factory_function(litellm.arealtime_calls, call_type="arealtime_calls")
+        self.acreate_realtime_transcription_session = self.factory_function(
+            litellm.acreate_realtime_transcription_session, call_type="acreate_realtime_transcription_session"
+        )
         self._aresponses_websocket = self.factory_function(
             litellm._aresponses_websocket, call_type="_aresponses_websocket"
         )
@@ -5360,6 +5371,9 @@ class Router:
             "afile_delete",
             "afile_content",
             "_arealtime",
+            "acreate_realtime_client_secret",
+            "arealtime_calls",
+            "acreate_realtime_transcription_session",
             "_aresponses_websocket",
             "acreate_fine_tuning_job",
             "acancel_fine_tuning_job",
@@ -5597,6 +5611,16 @@ class Router:
             elif call_type == "aresponses":
                 return await self._aresponses_with_streaming_fallbacks(
                     original_function=original_function,
+                    **kwargs,
+                )
+            elif call_type in (
+                "acreate_realtime_client_secret",
+                "arealtime_calls",
+                "acreate_realtime_transcription_session",
+            ):
+                return await self._ageneric_api_call_with_fallbacks(
+                    original_function=original_function,
+                    client=client,
                     **kwargs,
                 )
             elif call_type in (
@@ -6099,7 +6123,9 @@ class Router:
 
                 else:
                     error_message = "model={}. context_window_fallbacks={}. fallbacks={}.\n\nSet 'context_window_fallback' - https://docs.litellm.ai/docs/routing#fallbacks".format(
-                        model_group, context_window_fallbacks, fallbacks
+                        model_group,
+                        mask_sensitive_structure(context_window_fallbacks),
+                        mask_sensitive_structure(fallbacks),
                     )
                     verbose_router_logger.info(
                         msg="Got 'ContextWindowExceededError'. No context_window_fallback set. Defaulting \
@@ -6133,7 +6159,9 @@ class Router:
                     return response
                 else:
                     error_message = "model={}. content_policy_fallback={}. fallbacks={}.\n\nSet 'content_policy_fallback' - https://docs.litellm.ai/docs/routing#fallbacks".format(
-                        model_group, content_policy_fallbacks, fallbacks
+                        model_group,
+                        mask_sensitive_structure(content_policy_fallbacks),
+                        mask_sensitive_structure(fallbacks),
                     )
                     verbose_router_logger.info(
                         msg="Got 'ContentPolicyViolationError'. No content_policy_fallback set. Defaulting \
@@ -6143,7 +6171,7 @@ class Router:
                     if litellm.expose_router_debug_in_errors:
                         e.message += "\n{}".format(error_message)
             if fallbacks is not None and model_group is not None:
-                verbose_router_logger.debug(f"inside model fallbacks: {fallbacks}")
+                verbose_router_logger.debug(f"inside model fallbacks: {mask_sensitive_structure(fallbacks)}")
                 (
                     fallback_model_group,
                     generic_fallback_idx,
@@ -6156,11 +6184,12 @@ class Router:
                     fallback_model_group = fallbacks[generic_fallback_idx]["*"]
 
                 if fallback_model_group is None:
+                    masked_fallbacks = mask_sensitive_structure(fallbacks)
                     verbose_router_logger.info(
-                        f"No fallback model group found for original model_group={model_group}. Fallbacks={fallbacks}"
+                        f"No fallback model group found for original model_group={model_group}. Fallbacks={masked_fallbacks}"
                     )
                     if hasattr(original_exception, "message") and litellm.expose_router_debug_in_errors:
-                        original_exception.message += f"No fallback model group found for original model_group={model_group}. Fallbacks={fallbacks}"  # type: ignore
+                        original_exception.message += f"No fallback model group found for original model_group={model_group}. Fallbacks={masked_fallbacks}"  # type: ignore
                     raise original_exception
 
                 input_kwargs.update(
@@ -6178,23 +6207,23 @@ class Router:
                 return response
         except Exception as new_exception:
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
+            fallback_failure_exception_str = redact_string(str(new_exception))
             verbose_router_logger.error(
                 "litellm.router.py::async_function_with_fallbacks() - Error occurred while trying to do fallbacks - {}\n{}\n\nDebug Information:\nCooldown Deployments={}".format(
-                    str(new_exception),
-                    traceback.format_exc(),
+                    fallback_failure_exception_str,
+                    redact_string(traceback.format_exc()),
                     await _async_get_cooldown_deployments_with_debug_info(
                         litellm_router_instance=self,
                         parent_otel_span=parent_otel_span,
                     ),
                 )
             )
-            fallback_failure_exception_str = str(new_exception)
 
         if hasattr(original_exception, "message") and litellm.expose_router_debug_in_errors:
             # add the available fallbacks to the exception
             original_exception.message += ". Received Model Group={}\nAvailable Model Group Fallbacks={}".format(  # type: ignore
                 model_group,
-                fallback_model_group,
+                mask_sensitive_structure(fallback_model_group),
             )
             if len(fallback_failure_exception_str) > 0:
                 original_exception.message += (  # type: ignore
@@ -10045,12 +10074,7 @@ class Router:
 
             # If still no deployments after checking for fallbacks, raise an error
             if len(healthy_deployments) == 0:
-                if self.get_model_list(model_name=model) is None:
-                    message = f"You passed in model={model}. There is no 'model_name' with this string".format(model)
-                else:
-                    message = f"You passed in model={model}. There are no healthy deployments for this model".format(
-                        model
-                    )
+                message = f"You passed in model={model}. There are no healthy deployments for this model"
 
                 raise litellm.BadRequestError(
                     message=message,

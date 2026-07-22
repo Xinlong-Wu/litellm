@@ -1661,7 +1661,7 @@ def test_effort_beta_header_injection():
     # Test with effort parameter
     optional_params = {"output_config": {"effort": "low"}}
 
-    effort_used = model_info.is_effort_used(optional_params=optional_params)
+    effort_used = model_info.is_effort_used(optional_params=optional_params, custom_llm_provider="anthropic")
     assert effort_used is True
 
     headers = model_info.get_anthropic_headers(
@@ -1877,7 +1877,7 @@ def test_anthropic_drop_params_false_forwards_to_unsupported_model():
     ],
 )
 def test_anthropic_model_supports_effort_param_recognizes_supporting_models(model):
-    assert AnthropicConfig._model_supports_effort_param(model) is True
+    assert AnthropicConfig._model_supports_effort_param(model, "anthropic") is True
 
 
 @pytest.mark.parametrize(
@@ -1890,7 +1890,7 @@ def test_anthropic_model_supports_effort_param_recognizes_supporting_models(mode
     ],
 )
 def test_anthropic_model_supports_effort_param_rejects_non_supporting_models(model):
-    assert AnthropicConfig._model_supports_effort_param(model) is False
+    assert AnthropicConfig._model_supports_effort_param(model, "anthropic") is False
 
 
 @pytest.mark.parametrize(
@@ -2217,7 +2217,7 @@ def test_get_config_does_not_leak_module_constants():
 )
 def test_supports_effort_level_handles_provider_prefixes(model, level, expected):
     """``_supports_effort_level`` resolves bedrock/vertex/azure-prefixed model ids."""
-    assert AnthropicConfig._supports_effort_level(model, level) is expected
+    assert AnthropicConfig._supports_effort_level(model, level, "anthropic") is expected
 
 
 @pytest.mark.parametrize(
@@ -2239,7 +2239,7 @@ def test_supports_effort_level_handles_provider_prefixes(model, level, expected)
 def test_validate_effort_for_model_centralises_per_model_gating(
     model, effort, expect_error
 ):
-    err = AnthropicConfig._validate_effort_for_model(model, effort)
+    err = AnthropicConfig._validate_effort_for_model(model, effort, "anthropic")
     if expect_error:
         assert err is not None
         assert effort in err
@@ -2443,7 +2443,59 @@ def test_reasoning_effort_maps_to_adaptive_thinking_for_claude_4_6_models():
             assert result["output_config"]["effort"] == effort_map[effort]
 
 
-def test_get_supported_params_includes_reasoning_for_sonnet_4_6_alias():
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    original_model_cost = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original_model_cost
+        litellm.get_model_info.cache_clear()
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        # explicit cost-map entries, across provider routes / separators / date suffix
+        ("claude-opus-4-8", True),
+        ("anthropic.claude-opus-4-8", True),
+        ("vertex_ai/claude-opus-4-6@default", True),
+        ("openrouter/anthropic/claude-opus-4.7", True),
+        ("us.anthropic.claude-sonnet-4-6", True),
+        ("claude-opus-4-6-20260205", True),
+        # unmapped future models -> anthropic-claude fallback rule
+        ("claude-opus-4-9", True),
+        ("claude-sonnet-5-0", True),
+        # Claude 4.0 (dated): "4-20250514" must not be read as minor 4.20250514
+        ("claude-opus-4-20250514", False),
+        ("us.anthropic.claude-opus-4-20250514-v1:0", False),
+        ("bedrock/invoke/us.anthropic.claude-opus-4-20250514", False),
+        # sub-4.6 and legacy names
+        ("claude-opus-4-5", False),
+        ("claude-sonnet-4-5-20250929", False),
+        ("claude-3-7-sonnet", False),
+        ("claude-3-opus-20240229", False),
+        ("gpt-4o", False),
+    ],
+)
+def test_is_adaptive_thinking_model_is_sourced_from_cost_map(
+    local_model_cost_map, model, expected
+):
+    """Adaptive thinking resolves from the cost map first (an explicit
+    supports_adaptive_thinking entry, or the anthropic-claude fallback rule for unmapped
+    future Claudes), then from a date-safe opus/sonnet/haiku >= 4.6 name version as a
+    fallback for ids the cost map cannot resolve. The dated Claude 4.0 names stay
+    non-adaptive because the date suffix is not read as a minor version, while 4.8/4.9/5.x
+    are covered without a code change."""
+    assert AnthropicConfig._is_adaptive_thinking_model(model, "anthropic") is expected
+
+
+def test_get_supported_params_includes_reasoning_for_sonnet_4_6_alias(
+    local_model_cost_map,
+):
     """Sonnet 4.6 aliases should expose thinking + reasoning_effort in supported params."""
     config = AnthropicConfig()
 
@@ -2453,8 +2505,12 @@ def test_get_supported_params_includes_reasoning_for_sonnet_4_6_alias():
     assert "reasoning_effort" in params
 
 
-def test_get_supported_params_includes_reasoning_for_sonnet_4_6_dotted_alias():
-    """Dotted Sonnet 4.6 aliases should expose thinking + reasoning_effort in supported params."""
+def test_get_supported_params_includes_reasoning_for_sonnet_4_6_dotted_alias(
+    local_model_cost_map,
+):
+    """Dotted Sonnet 4.6 aliases should expose thinking + reasoning_effort in supported
+    params. The anthropic-claude fallback rule accepts a dotted minor (4.6) as well as
+    a dashed one, so an unmapped dotted alias still degrades to adaptive thinking."""
     config = AnthropicConfig()
 
     params = config.get_supported_openai_params(model="claude-sonnet-4.6")
@@ -2780,6 +2836,7 @@ def test_effort_beta_header_not_injected_for_46_models():
         result = model_info.is_effort_used(
             optional_params={"output_config": {"effort": "high"}},
             model=model,
+            custom_llm_provider="anthropic",
         )
         assert result is False, f"is_effort_used should return False for {model}"
 
@@ -2891,6 +2948,7 @@ def test_effort_beta_header_still_injected_for_older_models():
     result = model_info.is_effort_used(
         optional_params={"output_config": {"effort": "low"}},
         model="claude-opus-4-5-20251101",
+        custom_llm_provider="anthropic",
     )
     assert result is True
 

@@ -92,13 +92,21 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [authorizedUrl, setAuthorizedUrl] = useState<string | undefined>(undefined);
 
   // Single hook call shared by MCPConnectionStatus and MCPToolConfiguration to avoid duplicate requests.
-  const { tools, isLoadingTools, toolsError, toolsErrorStackTrace, canFetchTools, fetchTools, clearTools } =
-    useTestMCPConnection({
-      accessToken,
-      oauthAccessToken,
-      formValues,
-      enabled: true,
-    });
+  const {
+    tools,
+    isLoadingTools,
+    toolsError,
+    toolsErrorStatus,
+    toolsErrorStackTrace,
+    canFetchTools,
+    fetchTools,
+    clearTools,
+  } = useTestMCPConnection({
+    accessToken,
+    oauthAccessToken,
+    formValues,
+    enabled: true,
+  });
 
   const authType = formValues.auth_type as string | undefined;
   const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
@@ -389,8 +397,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             args: actualConfig.args,
             env: actualConfig.env,
           };
-
-          console.log("Parsed stdio config:", stdioFields);
         } catch (error) {
           NotificationsManager.fromBackend("Invalid JSON in stdio configuration");
           return;
@@ -448,8 +454,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         payload.credentials = credentialsPayload;
       }
 
-      console.log(`Payload: ${JSON.stringify(payload)}`);
-
       if (accessToken != null) {
         const response = isAdmin
           ? await createMCPServer(accessToken, payload)
@@ -488,7 +492,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         }
 
         NotificationsManager.success(
-          isAdmin ? "MCP Server created successfully" : "MCP Server submitted for admin review",
+          isAdmin
+            ? "MCP Server created successfully"
+            : {
+                message: "MCP Server submitted for admin review",
+                description: "Once an admin approves it, the server will appear in your MCP Servers list.",
+              },
         );
         form.resetFields();
         setCostConfig({});
@@ -594,9 +603,15 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   // Clear form, tools, and OAuth state when the modal closes so a previous server's
   // authorization, credentials, or tool list never bleed into the next "Add New MCP
   // Server" session, including when a parent dismisses the modal without routing
-  // through handleCancel or handleCreate.
+  // through handleCancel or handleCreate. Only a real open -> closed transition may
+  // trigger this: on the post-OAuth-redirect remount the modal starts closed while
+  // resumeOAuthFlow's token exchange is in flight, and resetting then discards the
+  // fetched token.
+  const wasModalVisibleRef = React.useRef(isModalVisible);
   React.useEffect(() => {
-    if (!isModalVisible) {
+    const wasVisible = wasModalVisibleRef.current;
+    wasModalVisibleRef.current = isModalVisible;
+    if (!isModalVisible && wasVisible) {
       form.resetFields();
       setFormValues({});
       setOauthAccessToken(null);
@@ -678,8 +693,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         >
           {!isAdmin && (
             <div className="rounded-md bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
-              Your submission will be sent for admin review before it becomes active. Note: the request must be made
-              with a team-scoped API key.
+              Your submission will be sent for admin review. Once approved, the server will appear in your MCP Servers
+              list. The request must be made with a team-scoped API key.
             </div>
           )}
           <div className="grid grid-cols-1 gap-6">
@@ -829,10 +844,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                         {/* Auth format hint */}
                         {getFieldValue("auth_type") && getFieldValue("auth_type") !== "none" && (
                           <div className="mb-4 p-3 bg-blue-50 rounded-lg text-sm text-blue-700 flex items-start gap-2">
-                            <InfoCircleOutlined className="mt-0.5 flex-shrink-0" />
+                            <InfoCircleOutlined className="mt-0.5 shrink-0" />
                             <span>
                               User keys will be sent as:{" "}
-                              <code className="font-mono bg-blue-100 px-1 rounded">
+                              <code className="font-mono bg-blue-100 px-1 rounded-sm">
                                 {getFieldValue("auth_type") === "bearer_token" && "Authorization: Bearer {key}"}
                                 {getFieldValue("auth_type") === "token" && "Authorization: token {key}"}
                                 {getFieldValue("auth_type") === "api_key" && "x-api-key: {key}"}
@@ -845,7 +860,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                         )}
                         {!getFieldValue("auth_type") && (
                           <div className="mb-4 p-3 bg-yellow-50 rounded-lg text-sm text-yellow-700 flex items-start gap-2">
-                            <InfoCircleOutlined className="mt-0.5 flex-shrink-0" />
+                            <InfoCircleOutlined className="mt-0.5 shrink-0" />
                             <span>
                               Set the <strong>Authentication Type</strong> below to specify how user keys are sent
                               (e.g., Bearer Token, API Key header).
@@ -1146,6 +1161,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               tools={tools}
               isLoadingTools={isLoadingTools}
               toolsError={toolsError}
+              toolsErrorStatus={toolsErrorStatus}
               toolsErrorStackTrace={toolsErrorStackTrace}
               canFetchTools={canFetchTools}
               fetchTools={fetchTools}
@@ -1170,6 +1186,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               externalTools={tools}
               externalIsLoading={isLoadingTools}
               externalError={toolsError}
+              externalErrorStatus={toolsErrorStatus}
               externalCanFetch={canFetchTools}
             />
           </div>

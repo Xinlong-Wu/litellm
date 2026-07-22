@@ -31,6 +31,7 @@ class KeyGenerateBody(BaseModel):
     team_id: str | None = None
     budget_id: str | None = None
     model_max_budget: dict[str, ModelBudgetEntry] | None = None
+    budget_fallbacks: dict[str, list[str]] | None = None
     budget_limits: list[BudgetWindow] | None = None
     tpm_limit: int | None = None
     rpm_limit: int | None = None
@@ -95,6 +96,12 @@ class ChatBody(BaseModel):
     metadata: ChatMetadata | None = None
 
 
+class AnthropicMessagesBody(BaseModel):
+    model: str
+    messages: list[ChatMessage]
+    max_tokens: int
+
+
 class OutMessage(BaseModel):
     content: str | None = None
 
@@ -123,6 +130,34 @@ class EmbedBody(BaseModel):
 
 class EmbedResponse(BaseModel):
     model: str | None = None
+
+
+# ---------- ocr ----------
+
+
+class OcrDocument(BaseModel):
+    """A document for /v1/ocr in Mistral OCR format: a document_url for PDFs/docs
+    or an image_url for images. exclude_none on serialize drops the unset one."""
+
+    type: str
+    document_url: str | None = None
+    image_url: str | None = None
+
+
+class OcrBody(BaseModel):
+    model: str
+    document: OcrDocument
+
+
+class OcrPage(BaseModel):
+    index: int
+    markdown: str
+
+
+class OcrResponse(BaseModel):
+    object: str | None = None
+    model: str | None = None
+    pages: list[OcrPage] = []
 
 
 # ---------- spend logs ----------
@@ -164,6 +199,20 @@ class SpendCalculateBody(BaseModel):
 
 class SpendCalculateResponse(BaseModel):
     cost: float
+
+
+# ---------- spend tags ----------
+
+
+class TagSpend(BaseModel):
+    individual_request_tag: str | None = None
+    log_count: int | None = None
+    total_spend: float | None = None
+
+
+class SpendTagsResponse(RootModel[list[TagSpend]]):
+    """GET /spend/tags answers with a bare array of per-tag aggregates, not an
+    object wrapping them (that's /global/spend/tags). Read the rows off .root."""
 
 
 # ---------- route probing ----------
@@ -216,14 +265,10 @@ class CustomPricing(BaseModel):
     def token_cost(self, prompt_tokens: int, completion_tokens: int) -> float:
         """Spend for a fresh (uncached) call under these rates: the proxy's
         custom-pricing formula (prompt * input + completion * output)."""
-        assert (
-            self.input_cost_per_token is not None
-            and self.output_cost_per_token is not None
-        ), "custom pricing has no per-token rates"
-        return (
-            prompt_tokens * self.input_cost_per_token
-            + completion_tokens * self.output_cost_per_token
+        assert self.input_cost_per_token is not None and self.output_cost_per_token is not None, (
+            "custom pricing has no per-token rates"
         )
+        return prompt_tokens * self.input_cost_per_token + completion_tokens * self.output_cost_per_token
 
 
 class ModelInfoEntry(BaseModel):
