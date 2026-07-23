@@ -7,7 +7,7 @@ Use this to route requests between Teams
 """
 
 import re
-from typing import TYPE_CHECKING, Any, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from litellm._logging import verbose_logger
 from litellm.types.router import RouterErrors
@@ -121,7 +121,7 @@ def _split_tags(tags: list[str]) -> tuple[list[str], list[str]]:
 
 
 def _exclude_deployments(
-    deployments: Union[list[Any], dict[Any, Any]],
+    deployments: list[Any] | dict[Any, Any],
     excluded_set: frozenset[str],
 ) -> list[Any]:
     if not excluded_set:
@@ -142,7 +142,7 @@ def _require_candidates(
 
 
 def _ban_only_base_pool(
-    deployments: Union[list[Any], dict[Any, Any]],
+    deployments: list[Any] | dict[Any, Any],
 ) -> list[Any]:
     # Mirrors untagged-request semantics so callers can't use !tags to escape the default pool.
     defaults = [d for d in deployments if "default" in (d.get("litellm_params", {}).get("tags") or [])]
@@ -152,7 +152,7 @@ def _ban_only_base_pool(
 async def get_deployments_for_tag(
     llm_router_instance: LitellmRouter,
     model: str,  # used to raise the correct error
-    healthy_deployments: Union[list[Any], dict[Any, Any]],
+    healthy_deployments: list[Any] | dict[Any, Any],
     request_kwargs: Optional[dict[Any, Any]] = None,
     metadata_variable_name: Literal["metadata", "litellm_metadata"] = "metadata",
 ):
