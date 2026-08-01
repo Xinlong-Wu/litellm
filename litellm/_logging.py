@@ -346,10 +346,6 @@ def _get_loggers_to_initialize():
 DEFAULT_LOG_FILENAME = "litellm.log"
 UVICORN_LOG_FILENAME = "uvicorn.log"
 
-# Tracks the file handler currently attached to the litellm loggers so re-init
-# (e.g. toggling JSON) can rebuild it without leaking duplicate handlers.
-_app_file_handler: Optional[logging.Handler] = None
-
 
 def _get_log_retention_days() -> int:
     raw = os.getenv("LITELLM_LOG_RETENTION_DAYS", "14")
@@ -462,7 +458,7 @@ class _SharedRotatingFileHandler(TimedRotatingFileHandler):
     def emit(self, record: logging.LogRecord) -> None:
         try:
             self._reopen_if_changed()
-        except Exception:
+        except (OSError, ValueError):
             pass
         super().emit(record)  # BaseRotatingHandler.emit -> shouldRollover -> doRollover, then write
         if self._dev is None and self.stream is not None:
@@ -507,6 +503,13 @@ def _build_file_handler(path: str, use_json: bool) -> _SharedRotatingFileHandler
     )
 
 
+def _get_app_file_handler() -> Optional[_SharedRotatingFileHandler]:
+    return next(
+        (handler for handler in verbose_proxy_logger.handlers if isinstance(handler, _SharedRotatingFileHandler)),
+        None,
+    )
+
+
 def add_file_logging(path: Optional[str] = None, use_json: Optional[bool] = None) -> Optional[str]:
     """Attach a daily-rotating file handler to the litellm loggers.
 
@@ -514,8 +517,6 @@ def add_file_logging(path: Optional[str] = None, use_json: Optional[bool] = None
     Returns the resolved path (or None if file logging is not configured).
     Idempotent: an existing litellm-managed file handler is replaced, not duplicated.
     """
-    global _app_file_handler
-
     resolved = path or _resolve_app_log_file()
     if not resolved:
         return None
@@ -526,14 +527,15 @@ def add_file_logging(path: Optional[str] = None, use_json: Optional[bool] = None
     # _get_loggers_to_initialize() here: it reads litellm.success_callback,
     # which is not defined yet during the import-time call.
     loggers = [verbose_logger, verbose_router_logger, verbose_proxy_logger]
-    if _app_file_handler is not None:
+    previous_handler = _get_app_file_handler()
+    if previous_handler is not None:
         for lg in loggers:
-            if _app_file_handler in lg.handlers:
-                lg.removeHandler(_app_file_handler)
+            if previous_handler in lg.handlers:
+                lg.removeHandler(previous_handler)
 
-    _app_file_handler = _build_file_handler(resolved, use_json)
+    file_handler = _build_file_handler(resolved, use_json)
     for lg in loggers:
-        lg.addHandler(_app_file_handler)
+        lg.addHandler(file_handler)
     return resolved
 
 
@@ -555,9 +557,7 @@ def _initialize_loggers_with_handler(handler: logging.Handler):
     - Adds a handler to each logger
     - Prevents bubbling to parent/root (critical to prevent duplicate JSON logs)
     """
-    global _app_file_handler
     handler.addFilter(_secret_filter)
-    _app_file_handler = None  # handlers are cleared below; drop the stale reference
     for lg in _get_loggers_to_initialize():
         lg.handlers.clear()  # remove any existing handlers
         lg.addHandler(handler)  # add JSON formatter handler

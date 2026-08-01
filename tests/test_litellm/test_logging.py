@@ -326,10 +326,10 @@ async def test_cache_hit_includes_custom_llm_provider():
 import glob
 import logging.handlers
 
-import litellm._logging as _logging_module
 from litellm._logging import (
     add_file_logging,
     resolve_uvicorn_log_file,
+    _get_app_file_handler,
     _get_uvicorn_log_config,
     _lockfile_for,
     _reattach_app_file_handler,
@@ -345,13 +345,12 @@ def clean_file_logging(monkeypatch):
     for var in ("LITELLM_LOG_DIR", "LITELLM_LOG_FILE", "LITELLM_LOG_RETENTION_DAYS"):
         monkeypatch.delenv(var, raising=False)
     yield
-    handler = _logging_module._app_file_handler
+    handler = _get_app_file_handler()
     if handler is not None:
         for lg in _FILE_LOG_LOGGERS:
             if handler in lg.handlers:
                 lg.removeHandler(handler)
         handler.close()
-    _logging_module._app_file_handler = None
 
 
 def test_add_file_logging_writes_marker_to_explicit_path(tmp_path, clean_file_logging):
@@ -387,14 +386,14 @@ def test_add_file_logging_is_idempotent(tmp_path, clean_file_logging):
 
 def test_add_file_logging_no_op_without_config(clean_file_logging):
     assert add_file_logging() is None
-    assert _logging_module._app_file_handler is None
+    assert _get_app_file_handler() is None
 
 
 def test_file_handler_is_daily_rotating_with_retention(tmp_path, clean_file_logging, monkeypatch):
     monkeypatch.setenv("LITELLM_LOG_RETENTION_DAYS", "7")
     add_file_logging(str(tmp_path / "litellm.log"))
 
-    handler = _logging_module._app_file_handler
+    handler = _get_app_file_handler()
     assert isinstance(handler, _SharedRotatingFileHandler)
     assert handler.when == "MIDNIGHT"
     assert handler.backupCount == 7
@@ -407,7 +406,7 @@ def test_rollover_is_mutually_exclusive_across_holders(tmp_path, clean_file_logg
     import fcntl
 
     log_file = tmp_path / "litellm.log"
-    handler = add_file_logging(str(log_file)) and _logging_module._app_file_handler
+    handler = add_file_logging(str(log_file)) and _get_app_file_handler()
     verbose_proxy_logger.error("before-rotate")
 
     def dated_files():
@@ -432,7 +431,7 @@ def test_follower_reopens_new_base_after_rotation(tmp_path, clean_file_logging):
     """After rotation the base file is recreated on the next emit and old lines
     are not carried over."""
     log_file = tmp_path / "litellm.log"
-    handler = add_file_logging(str(log_file)) and _logging_module._app_file_handler
+    handler = add_file_logging(str(log_file)) and _get_app_file_handler()
     verbose_proxy_logger.error("old-line")
 
     handler._maybe_rollover()  # renames base -> dated (delay=True: base absent until next write)
@@ -472,7 +471,7 @@ def test_reattach_uses_json_formatter(tmp_path, clean_file_logging, monkeypatch)
     add_file_logging()  # text formatter initially
     _reattach_app_file_handler(use_json=True)
 
-    handler = _logging_module._app_file_handler
+    handler = _get_app_file_handler()
     assert isinstance(handler.formatter, JsonFormatter)
 
 

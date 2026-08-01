@@ -1010,12 +1010,13 @@ def test_tiered_pricing_only_deployment_selects_router_model_id():
     from litellm import Router
     from litellm.cost_calculator import _select_model_name_for_cost_calc
 
+    model = "dashscope/litellm-test-tiered-only"
     router = Router(
         model_list=[
             {
-                "model_name": "qwen-3.7-plus",
+                "model_name": "tiered-only",
                 "litellm_params": {
-                    "model": "dashscope/qwen3.7-plus",
+                    "model": model,
                     "api_key": "sk-fake",
                 },
                 "model_info": {
@@ -1036,10 +1037,10 @@ def test_tiered_pricing_only_deployment_selects_router_model_id():
     assert entry.get("input_cost_per_token") is None
     assert entry.get("tiered_pricing") is not None
     # The stripped shared alias must not carry tiered pricing.
-    assert litellm.model_cost["dashscope/qwen3.7-plus"].get("tiered_pricing") is None
+    assert litellm.model_cost[model].get("tiered_pricing") is None
 
     selected = _select_model_name_for_cost_calc(
-        model="dashscope/qwen3.7-plus",
+        model=model,
         completion_response=None,
         custom_pricing=True,
         custom_llm_provider="dashscope",
@@ -1057,12 +1058,13 @@ def test_tiered_pricing_only_deployment_completion_cost_is_nonzero():
     from litellm import Router
     from litellm.types.utils import Choices, Message
 
+    model = "dashscope/litellm-test-tiered-only"
     router = Router(
         model_list=[
             {
-                "model_name": "qwen-3.7-plus",
+                "model_name": "tiered-only",
                 "litellm_params": {
-                    "model": "dashscope/qwen3.7-plus",
+                    "model": model,
                     "api_key": "sk-fake",
                 },
                 "model_info": {
@@ -1085,7 +1087,7 @@ def test_tiered_pricing_only_deployment_completion_cost_is_nonzero():
     router_model_id = router.model_list[0]["model_info"]["id"]
 
     response = ModelResponse(
-        model="dashscope/qwen3.7-plus",
+        model=model,
         choices=[Choices(index=0, message=Message(role="assistant", content="hi"))],
         usage=Usage(prompt_tokens=12, completion_tokens=377, total_tokens=389),
     )
@@ -1093,7 +1095,7 @@ def test_tiered_pricing_only_deployment_completion_cost_is_nonzero():
 
     cost = completion_cost(
         completion_response=response,
-        model="dashscope/qwen3.7-plus",
+        model=model,
         custom_llm_provider="dashscope",
         custom_pricing=True,
         router_model_id=router_model_id,

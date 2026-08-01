@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import Mapping, cast
+from typing import Mapping
+
+from prisma.errors import PrismaError
+from redis.exceptions import RedisError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
@@ -13,7 +16,15 @@ from litellm.constants import (
     SPEND_LOG_RUN_LOOPS,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.proxy._types import DB_CONNECTION_ERROR_TYPES
 from litellm.proxy.utils import PrismaClient
+
+SPEND_LOG_PROMPT_CLEANUP_ERROR_TYPES = (
+    PrismaError,
+    RedisError,
+    OSError,
+    *DB_CONNECTION_ERROR_TYPES,
+)
 
 SCRUB_OLD_PROMPTS_SQL = """
 UPDATE "LiteLLM_SpendLogs"
@@ -66,7 +77,7 @@ class SpendLogPromptCleanup:
         from litellm.proxy.proxy_server import general_settings as default_settings
 
         self.general_settings: Mapping[str, object] = (
-            general_settings if general_settings is not None else cast(Mapping[str, object], default_settings)
+            general_settings if general_settings is not None else default_settings
         )
         from litellm.proxy.proxy_server import proxy_logging_obj
 
@@ -106,7 +117,7 @@ class SpendLogPromptCleanup:
                     cutoff_date,
                     self.batch_size,
                 )
-            except Exception as batch_exc:
+            except SPEND_LOG_PROMPT_CLEANUP_ERROR_TYPES as batch_exc:
                 consecutive_failures += 1
                 verbose_proxy_logger.exception(
                     "Spend log prompt scrub batch failed "
@@ -179,7 +190,7 @@ class SpendLogPromptCleanup:
             verbose_proxy_logger.info(f"Scrubbing prompt content from logs older than {cutoff_date.isoformat()}")
             total_scrubbed = await self._scrub_old_prompts(prisma_client, cutoff_date)
             verbose_proxy_logger.info(f"Scrubbed prompt content from {total_scrubbed} logs")
-        except Exception as e:
+        except SPEND_LOG_PROMPT_CLEANUP_ERROR_TYPES as e:
             verbose_proxy_logger.exception(
                 "Error during spend log prompt scrub: %s: %s",
                 type(e).__name__,
