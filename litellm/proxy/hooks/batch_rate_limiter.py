@@ -20,8 +20,8 @@ Quick summary:
 from typing import (
     TYPE_CHECKING,
     Any,
+    Collection,
     Dict,
-    Iterable,
     List,
     Literal,
     NoReturn,
@@ -611,7 +611,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
     async def _enforce_batch_file_model_access(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        models: Optional[Iterable[str]] = None,
+        models: Collection[str],
         target_model_names: Optional[List[str]] = None,
     ) -> None:
         """Reject the batch if the caller is not authorized for the upload target.
@@ -636,10 +636,8 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         from litellm.proxy.proxy_server import proxy_logging_obj
         from litellm.proxy.proxy_server import user_api_key_cache
 
-        if target_model_names:
-            models = target_model_names
-
-        if not models:
+        models_to_check = target_model_names if target_model_names else models
+        if not models_to_check:
             return
 
         team_object = None
@@ -667,7 +665,14 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 ) from e
 
         llm_model_list = llm_router.model_list if llm_router is not None else None
-        for model in models:
+        if (
+            team_object is None
+            and user_api_key_dict.team_id is None
+            and SpecialModelNames.all_team_models.value in (user_api_key_dict.models or [])
+        ):
+            return
+
+        for model in models_to_check:
             model_to_check = model
             try:
                 if team_object is not None:

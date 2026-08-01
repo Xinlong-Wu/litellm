@@ -1910,6 +1910,7 @@ async def test_update_team_team_member_budget_not_passed_to_db():
             team_member_rpm_limit=None,
             team_member_tpm_limit=None,
             team_member_budget_duration=None,
+            team_member_model_group_max_budget=None,
         ):
             # Remove team_member_budget from updated_kv as the real function does
             result_kv = updated_kv.copy()
@@ -2121,6 +2122,52 @@ async def test_create_team_member_budget_table():
         assert "team_member_budget_duration" not in result
         assert "team_member_rpm_limit" not in result
         assert "team_member_tpm_limit" not in result
+
+
+@pytest.mark.asyncio
+async def test_create_team_member_budget_table_with_model_group_budget():
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy._types import LitellmUserRoles, NewTeamRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    group_budget = {"premium": {"max_budget": 50.0, "budget_duration": "30d"}}
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="test_user_id",
+    )
+    data = NewTeamRequest(team_id="test_team_id", team_alias="Test Team")
+    new_team_data_json = {
+        "team_id": "test_team_id",
+        "team_alias": "Test Team",
+        "team_member_model_group_max_budget": group_budget,
+    }
+
+    assert TeamMemberBudgetHandler.should_create_budget(
+        team_member_model_group_max_budget=group_budget
+    )
+
+    mock_budget_response = MagicMock()
+    mock_budget_response.budget_id = "budget_grp"
+
+    with patch(
+        "litellm.proxy.management_endpoints.budget_management_endpoints.new_budget",
+        new_callable=AsyncMock,
+    ) as mock_new_budget:
+        mock_new_budget.return_value = mock_budget_response
+
+        result = await TeamMemberBudgetHandler.create_team_member_budget_table(
+            data=data,
+            new_team_data_json=new_team_data_json,
+            user_api_key_dict=mock_user_api_key_dict,
+            team_member_model_group_max_budget=group_budget,
+        )
+
+        budget_request = mock_new_budget.call_args[1]["budget_obj"]
+        assert budget_request.model_group_max_budget == group_budget
+        assert "team_member_model_group_max_budget" not in result
 
 
 @pytest.mark.asyncio
@@ -2341,6 +2388,7 @@ async def test_update_team_with_team_member_budget_duration():
             team_member_rpm_limit=None,
             team_member_tpm_limit=None,
             team_member_budget_duration=None,
+            team_member_model_group_max_budget=None,
         ):
             result_kv = updated_kv.copy()
             result_kv.pop("team_member_budget", None)

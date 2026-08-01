@@ -68,6 +68,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
 )
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
+    coerce_token_limit,
     get_metadata_variable_name_from_kwargs,
 )
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
@@ -3637,7 +3638,9 @@ class Router:
             kwargs["model"] = model
             kwargs["prompt"] = prompt
             kwargs["original_function"] = self._image_generation
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+            kwargs["num_retries"] = (
+                kwargs.get("num_retries") if kwargs.get("num_retries") is not None else self.num_retries
+            )
             kwargs.setdefault("metadata", {}).update({"model_group": model})
             response = self.function_with_fallbacks(**kwargs)
 
@@ -3692,7 +3695,9 @@ class Router:
             kwargs["model"] = model
             kwargs["prompt"] = prompt
             kwargs["original_function"] = self._aimage_generation
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+            kwargs["num_retries"] = (
+                kwargs.get("num_retries") if kwargs.get("num_retries") is not None else self.num_retries
+            )
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             response = await self.async_function_with_fallbacks(**kwargs)
 
@@ -4063,7 +4068,9 @@ class Router:
         try:
             kwargs["model"] = model
             kwargs["prompt"] = prompt
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+            kwargs["num_retries"] = (
+                kwargs.get("num_retries") if kwargs.get("num_retries") is not None else self.num_retries
+            )
             kwargs.setdefault("metadata", {}).update({"model_group": model})
 
             # pick the one that is available (lowest TPM/RPM)
@@ -4197,7 +4204,9 @@ class Router:
             kwargs["model"] = model
             kwargs["adapter_id"] = adapter_id
             kwargs["original_function"] = self._aadapter_completion
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+            kwargs["num_retries"] = (
+                kwargs.get("num_retries") if kwargs.get("num_retries") is not None else self.num_retries
+            )
             kwargs.setdefault("metadata", {}).update({"model_group": model})
             response = await self.async_function_with_fallbacks(**kwargs)
 
@@ -4818,7 +4827,9 @@ class Router:
         try:
             kwargs["model"] = model
             kwargs["original_function"] = self._acreate_file
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+            kwargs["num_retries"] = (
+                kwargs.get("num_retries") if kwargs.get("num_retries") is not None else self.num_retries
+            )
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             response = await self.async_function_with_fallbacks(**kwargs)
 
@@ -5079,7 +5090,9 @@ class Router:
         try:
             kwargs["model"] = model
             kwargs["original_function"] = self._acreate_batch
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+            kwargs["num_retries"] = (
+                kwargs.get("num_retries") if kwargs.get("num_retries") is not None else self.num_retries
+            )
             metadata_variable_name = _get_router_metadata_variable_name(function_name="_acreate_batch")
             self._update_kwargs_before_fallbacks(
                 model=model,
@@ -5295,7 +5308,9 @@ class Router:
         try:
             kwargs["model"] = model
             kwargs["original_function"] = self._acancel_batch
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+            kwargs["num_retries"] = (
+                kwargs.get("num_retries") if kwargs.get("num_retries") is not None else self.num_retries
+            )
             metadata_variable_name = _get_router_metadata_variable_name(function_name="_acancel_batch")
             self._update_kwargs_before_fallbacks(
                 model=model,
@@ -8544,18 +8559,10 @@ class Router:
         if deployment is None:
             return (None, None)
 
-        def _as_int(value: object) -> "int | None":
-            if value is None or isinstance(value, bool):
-                return None
-            try:
-                return int(value)
-            except (TypeError, ValueError):
-                return None
-
         model_info = deployment.model_info
         return (
-            _as_int(model_info.get("max_input_tokens")),
-            _as_int(model_info.get("max_output_tokens")),
+            coerce_token_limit(model_info.get("max_input_tokens")),
+            coerce_token_limit(model_info.get("max_output_tokens")),
         )
 
     def get_deployment_credentials_with_provider(

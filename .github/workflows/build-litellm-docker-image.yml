@@ -132,4 +132,4 @@ jobs:
             org.opencontainers.image.revision=${{ steps.metadata.outputs.revision }}
             org.opencontainers.image.version=${{ inputs.upstream_tag }}
           cache-from: type=gha,scope=${{ inputs.ref }}
-          cache-to: type=gha,mode=max,scope=${{ inputs.ref }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.ref }},ignore-error=true

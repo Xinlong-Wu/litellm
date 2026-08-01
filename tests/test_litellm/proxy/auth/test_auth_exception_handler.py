@@ -20,9 +20,7 @@ from prisma.errors import (
     UniqueViolationError,
 )
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
@@ -68,22 +66,12 @@ async def test_handle_authentication_error_db_unavailable_connectivity(prisma_er
     "prisma_error",
     [
         DataError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
-        UniqueViolationError(
-            data={"user_facing_error": {"meta": {"table": "test_table"}}}
-        ),
-        ForeignKeyViolationError(
-            data={"user_facing_error": {"meta": {"table": "test_table"}}}
-        ),
-        MissingRequiredValueError(
-            data={"user_facing_error": {"meta": {"table": "test_table"}}}
-        ),
+        UniqueViolationError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
+        ForeignKeyViolationError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
+        MissingRequiredValueError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
         RawQueryError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
-        TableNotFoundError(
-            data={"user_facing_error": {"meta": {"table": "test_table"}}}
-        ),
-        RecordNotFoundError(
-            data={"user_facing_error": {"meta": {"table": "test_table"}}}
-        ),
+        TableNotFoundError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
+        RecordNotFoundError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
     ],
 )
 async def test_handle_authentication_error_data_layer_errors_do_not_fall_back(
@@ -287,9 +275,7 @@ async def test_handle_authentication_error_budget_exceeded():
     with pytest.raises(ProxyException) as exc_info:
         from litellm.exceptions import BudgetExceededError
 
-        budget_error = BudgetExceededError(
-            message="Budget exceeded", current_cost=100, max_budget=100
-        )
+        budget_error = BudgetExceededError(message="Budget exceeded", current_cost=100, max_budget=100)
         await handler._handle_authentication_error(
             budget_error,
             mock_request,
@@ -300,6 +286,31 @@ async def test_handle_authentication_error_budget_exceeded():
         )
 
     assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+    assert int(exc_info.value.code) == status.HTTP_429_TOO_MANY_REQUESTS
+
+
+@pytest.mark.asyncio
+async def test_handle_authentication_error_rate_limit():
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    with pytest.raises(ProxyException) as exc_info:
+        from litellm.exceptions import RateLimitError
+
+        rate_error = RateLimitError(
+            message="exceeded RPM limit for model group=premium",
+            llm_provider="litellm",
+            model="premium",
+        )
+        await handler._handle_authentication_error(
+            rate_error,
+            MagicMock(),
+            {},
+            "/test",
+            None,
+            "test-key",
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.rate_limit_error
     assert int(exc_info.value.code) == status.HTTP_429_TOO_MANY_REQUESTS
 
 
