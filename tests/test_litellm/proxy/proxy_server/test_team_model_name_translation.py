@@ -728,6 +728,7 @@ async def test_v1_models_translates_team_model_for_access_group_key(monkeypatch)
     router.get_configured_token_limits.return_value = (None, None)
     router.model_list = [team_dep]
     router.get_model_list.return_value = [team_dep]
+    router.get_configured_token_limits.return_value = (None, None)
 
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(ps, "user_model", None)
@@ -770,6 +771,7 @@ async def test_v1_models_keeps_internal_names_when_public_name_flag_disabled(
     router.get_configured_token_limits.return_value = (None, None)
     router.model_list = [team_dep]
     router.get_model_list.return_value = [team_dep]
+    router.get_configured_token_limits.return_value = (None, None)
 
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(ps, "user_model", None)
@@ -806,6 +808,7 @@ async def test_v1_models_translates_team_model_with_metadata(monkeypatch):
     router.model_list = [team_dep]
     router.get_model_list.return_value = [team_dep]
     router.get_model_group_info.return_value = None
+    router.get_configured_token_limits.return_value = (None, None)
 
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(ps, "user_model", None)
@@ -854,6 +857,7 @@ async def test_v1_models_metadata_fallbacks_use_internal_routing_key(monkeypatch
     # Fallbacks are keyed on the internal routing name, as the router stores them.
     router.fallbacks = [{"model_name_teamX_uuid9": ["gpt-4o-backup"]}]
     router.get_model_group_info.return_value = None
+    router.get_configured_token_limits.return_value = (None, None)
 
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(ps, "user_model", None)
@@ -913,6 +917,7 @@ async def test_v1_models_metadata_does_not_leak_other_team_fallbacks(monkeypatch
         {"model_name_teamY_uuidZ": ["teamY-backup"]},
     ]
     router.get_model_group_info.return_value = None
+    router.get_configured_token_limits.return_value = (None, None)
 
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(ps, "user_model", None)

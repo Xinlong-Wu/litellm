@@ -367,7 +367,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
     @staticmethod
     def _is_native_audio_model(model: str) -> bool:
-        return bool(GeminiRealtimeConfig._model_cost_entry(model).get("gemini_native_audio"))
+        if GeminiRealtimeConfig._model_cost_entry(model).get("gemini_native_audio"):
+            return True
+        stripped = model.split("/", 1)[-1]
+        return stripped.startswith("gemini-2.5-flash-native-audio")
 
     @staticmethod
     def _coerce_response_modalities(model: str, modalities: list[Any]) -> list[str]:

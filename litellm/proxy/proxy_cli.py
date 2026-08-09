@@ -187,7 +187,10 @@ class ProxyInitializationHelpers:
         import uvicorn
 
         import litellm
-        from litellm._logging import _get_uvicorn_json_log_config
+        from litellm._logging import (
+            _get_uvicorn_log_config,
+            resolve_uvicorn_log_file,
+        )
 
         uvicorn_args = {
             "app": "litellm.proxy.proxy_server:app",
@@ -197,9 +200,10 @@ class ProxyInitializationHelpers:
         if log_config is not None:
             print(f"Using log_config: {log_config}")
             uvicorn_args["log_config"] = log_config
-        elif litellm.json_logs:
-            # Use JSON log config for uvicorn to ensure all logs (including exceptions) are JSON
-            uvicorn_args["log_config"] = _get_uvicorn_json_log_config()
+        elif litellm.json_logs or resolve_uvicorn_log_file() is not None:
+            # Apply a uvicorn log_config when JSON logs are on, or when a log
+            # directory is configured (so uvicorn access/error logs land on disk).
+            uvicorn_args["log_config"] = _get_uvicorn_log_config(use_json=litellm.json_logs)
         if keepalive_timeout is not None:
             uvicorn_args["timeout_keep_alive"] = keepalive_timeout
         if timeout_worker_healthcheck is not None:
@@ -686,6 +690,15 @@ class ProxyInitializationHelpers:
     help="Path to the logging configuration file",
 )
 @click.option(
+    "--log_dir",
+    default=None,
+    type=str,
+    envvar="LITELLM_LOG_DIR",
+    help="Directory to write logs to (daily-rotated). Application logs go to "
+    "<dir>/litellm.log and uvicorn logs to <dir>/uvicorn.log. Also settable via "
+    "LITELLM_LOG_DIR.",
+)
+@click.option(
     "--setup",
     is_flag=True,
     default=False,
@@ -893,6 +906,7 @@ def run_server(
     ssl_certfile_path,
     ciphers,
     log_config,
+    log_dir,
     use_prisma_db_push: bool,
     skip_server_startup,
     keepalive_timeout,
@@ -921,6 +935,14 @@ def run_server(
 
         run_setup_wizard()
         return
+
+    if log_dir:
+        # Export so worker subprocesses re-attach file logging on import, and
+        # attach in this process now (litellm was imported before the env was set).
+        os.environ["LITELLM_LOG_DIR"] = log_dir
+        from litellm._logging import add_file_logging
+
+        add_file_logging()
 
     args = locals()
     if local:

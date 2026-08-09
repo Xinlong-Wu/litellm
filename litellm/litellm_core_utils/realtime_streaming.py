@@ -337,6 +337,7 @@ class RealTimeStreaming:
             )
             sent = False
             for msg in transformed:
+                msg = self._maybe_inject_guardrail_auto_response_disable(msg)
                 try:
                     msg_obj = json.loads(msg)
                 except (json.JSONDecodeError, TypeError):

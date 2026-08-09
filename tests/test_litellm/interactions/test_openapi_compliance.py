@@ -16,6 +16,8 @@ import httpx
 import pytest
 from openapi_core import OpenAPI
 
+from litellm.types.interactions import Interaction, InteractionStatus
+
 OPENAPI_SPEC_URL = "https://ai.google.dev/static/api/interactions.openapi.json"
 
 
@@ -32,8 +34,7 @@ def _load_openapi_spec_dict() -> Dict[str, Any]:
         return response.json()
     except Exception as e:  # pragma: no cover - defensive, env-dependent
         pytest.skip(
-            f"Skipping Google Interactions OpenAPI compliance tests - "
-            f"unable to load spec from {OPENAPI_SPEC_URL}: {e}"
+            f"Skipping Google Interactions OpenAPI compliance tests - unable to load spec from {OPENAPI_SPEC_URL}: {e}"
         )
 
 
@@ -105,26 +106,23 @@ class TestRequestCompliance:
         assert "string" in input_types, "Input should support string"
         assert "array" in input_types, "Input should support array"
 
-    def test_content_schema_uses_discriminator(self, spec_dict):
-        """Verify Content uses type discriminator."""
+    def test_content_schema_uses_type_tagged_union(self, spec_dict):
+        """Verify Content uses a type-tagged union."""
         content_schema = spec_dict["components"]["schemas"]["Content"]
+        one_of = content_schema["oneOf"]
+        ref_names = [option["$ref"].split("/")[-1] for option in one_of]
+        type_tags = {
+            spec_dict["components"]["schemas"][ref_name]["properties"]["type"]["const"]
+            for ref_name in ref_names
+        }
 
-        assert "discriminator" in content_schema
-        assert content_schema["discriminator"]["propertyName"] == "type"
+        assert len(type_tags) == len(ref_names)
+        assert "TextContent" in ref_names
+        assert "text" in type_tags
 
-        # Check TextContent is an option (via mapping if present, or via oneOf refs)
-        mapping = content_schema["discriminator"].get("mapping")
-        if mapping:
-            assert "text" in mapping
-            print(f"Content type discriminator mapping: {list(mapping.keys())}")
-        else:
-            # Discriminator without explicit mapping — verify via oneOf
-            one_of = content_schema.get("oneOf", [])
-            ref_names = [opt["$ref"].split("/")[-1] for opt in one_of if "$ref" in opt]
-            assert (
-                "TextContent" in ref_names
-            ), f"TextContent not found in oneOf refs: {ref_names}"
-            print(f"Content type discriminator (no mapping), oneOf refs: {ref_names}")
+        discriminator = content_schema.get("discriminator")
+        if discriminator is not None:
+            assert discriminator["propertyName"] == "type"
 
     def test_text_content_schema(self, spec_dict):
         """Verify TextContent schema."""
@@ -197,6 +195,9 @@ class TestResponseCompliance:
             "queued",
         ]
         assert status_prop["enum"] == expected_statuses
+        assert [status.value for status in InteractionStatus] == expected_statuses
+        interaction = Interaction.model_validate({"id": "interaction-test", "status": "queued"})
+        assert interaction.status.value == "queued"
         print(f"✓ Status enum values: {expected_statuses}")
 
     def test_usage_schema(self, spec_dict):
@@ -207,9 +208,7 @@ class TestResponseCompliance:
         expected_fields = ["total_input_tokens", "total_output_tokens", "total_tokens"]
 
         for field in expected_fields:
-            assert (
-                field in usage_schema["properties"]
-            ), f"Usage field '{field}' not in spec"
+            assert field in usage_schema["properties"], f"Usage field '{field}' not in spec"
             print(f"✓ Usage field '{field}' exists")
 
 
@@ -228,9 +227,7 @@ class TestToolsCompliance:
         """Verify FunctionDeclaration schema for function tools."""
         if "FunctionDeclaration" in spec_dict["components"]["schemas"]:
             func_schema = spec_dict["components"]["schemas"]["FunctionDeclaration"]
-            assert "name" in func_schema.get(
-                "properties", {}
-            ) or "name" in func_schema.get("required", [])
+            assert "name" in func_schema.get("properties", {}) or "name" in func_schema.get("required", [])
             print("✓ FunctionDeclaration schema found")
         else:
             print("⚠ FunctionDeclaration schema not found (may be nested)")
@@ -296,6 +293,4 @@ if __name__ == "__main__":
             if method in ["get", "post", "delete", "put", "patch"]:
                 print(f"  {method.upper()} {path}")
 
-    print(
-        f"\nSchemas: {list(spec.get('components', {}).get('schemas', {}).keys())[:10]}..."
-    )
+    print(f"\nSchemas: {list(spec.get('components', {}).get('schemas', {}).keys())[:10]}...")
