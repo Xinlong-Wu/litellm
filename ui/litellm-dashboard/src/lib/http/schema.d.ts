@@ -7185,6 +7185,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/spend_logs/end_users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Spend Log End Users
+         * @description The distinct end users appearing in spend logs over a time window, for the logs
+         *     page filter dropdown.
+         *
+         *     Scoped like `/spend/logs/ui`: a proxy admin sees every end user in the window,
+         *     anyone else sees only end users from their own requests or from teams they
+         *     administer (or hold the `/spend/logs` permission on).
+         *
+         *     The window is required and the inner scan is capped at SPEND_LOGS_FACET_SCAN_CAP
+         *     rows, so the query cannot degrade into a full-table scan the way
+         *     `/global/all_end_users` does.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location --globoff 'http://0.0.0.0:4000/management/v1/spend_logs/end_users?filter[startTime][gte]=2026-07-23T00:00:00Z&filter[startTime][lte]=2026-07-24T00:00:00Z&page_size=50&q=acme'         --header 'Authorization: Bearer sk-1234'
+         *     ```
+         */
+        get: operations["list_spend_log_end_users_management_v1_spend_logs_end_users_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/mcp-rest/test/connection": {
         parameters: {
             query?: never;
@@ -12808,6 +12842,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/sso/saml/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Saml Callback
+         * @description Assertion Consumer Service. Validates the IdP assertion and issues a UI session.
+         */
+        post: operations["saml_callback_sso_saml_callback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sso/saml/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Saml Login
+         * @description SP-initiated SAML login. Redirects the user to the configured IdP.
+         */
+        get: operations["saml_login_sso_saml_login_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sso/saml/metadata": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Saml Metadata
+         * @description Service Provider metadata XML, for registering this proxy at the IdP.
+         */
+        get: operations["saml_metadata_sso_saml_metadata_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tag/daily/activity": {
         parameters: {
             query?: never;
@@ -13860,11 +13954,12 @@ export interface paths {
          * Patch Team
          * @description Partially update a team using RFC 7386 JSON Merge Patch semantics.
          *
-         *     `team_id` is taken from the path. `metadata` is merged with the team's stored
-         *     metadata rather than replacing it: an omitted key is preserved, `key: null`
-         *     deletes it, and any other value overwrites (recursing into nested objects).
-         *     Every other field behaves exactly like `POST /team/update` (omitted preserves,
-         *     a value overwrites). Returns the full updated team.
+         *     `team_id` is taken from the path; a `team_id` in the body is accepted only when it
+         *     matches. `metadata` is merged with the team's stored metadata rather than replacing
+         *     it: an omitted key is preserved, `key: null` deletes it, and any other value
+         *     overwrites (recursing into nested objects). Every other field behaves exactly like
+         *     `POST /team/update` (omitted preserves, a value overwrites). Returns the full
+         *     updated team.
          *
          *     ```
          *     curl --location --request PATCH 'http://0.0.0.0:4000/team/8d916b1c-510d-4894-a334-1c16a93344f5'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data-raw '{
@@ -18918,6 +19013,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/organization/{organization_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Organization V2
+         * @description Partial update of an organization (RESTful PATCH, RFC 7396 merge-patch semantics).
+         *
+         *     A sent field is written and an omitted one is left untouched (presence is read from
+         *     ``model_fields_set``). Clear tokens are per field: budget limits and ``metadata`` clear with
+         *     ``null``, ``models`` with ``[]``, and ``object_permission`` with ``null`` (it merges when sent,
+         *     so an empty ``{}`` is rejected). ``organization_alias`` is required and cannot be cleared.
+         *     Validation failures return 422; the object-permission upsert, budget-row write, and
+         *     org-row write are one transaction.
+         */
+        patch: operations["update_organization_v2_v2_organization__organization_id__patch"];
+        trace?: never;
+    };
     "/v2/rerank": {
         parameters: {
             query?: never;
@@ -22669,15 +22791,16 @@ export interface components {
              */
             provider_url_destination_allowed_hosts?: string[] | null;
             /**
+             * Proxy Config Reload Interval Seconds
+             * @description how often (in seconds) each pod reloads config-in-DB objects (models, credentials, guardrails, etc.) when store_model_in_db is enabled; lower values speed up multi-pod convergence at the cost of more DB load. Applied on proxy startup
+             * @default 30
+             */
+            proxy_config_reload_interval_seconds: number;
+            /**
              * Reject Clientside Metadata Tags
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
              */
             reject_clientside_metadata_tags?: boolean | null;
-            /**
-             * Skip User Budget On Team Key
-             * @description If True, restores the legacy behavior where a user's personal max_budget is NOT enforced when their key belongs to a team; only the team (and team-member) budgets apply. Defaults to False, meaning the user's personal max_budget is always enforced regardless of whether the key belongs to a team (see GitHub issue #12905).
-             */
-            skip_user_budget_on_team_key?: boolean | null;
             /**
              * Store Model In Db
              * @description If True, models and config are stored in and loaded from the database. Default is False.
@@ -23751,6 +23874,16 @@ export interface components {
             updated_at?: number | null;
         };
         /**
+         * FacetListResponse
+         * @description The distinct values one column takes over a filtered query. `data` holds bare values, not entity rows.
+         */
+        FacetListResponse: {
+            /** Data */
+            data: string[];
+            links: components["schemas"]["PageLinks"];
+            meta: components["schemas"]["PageMeta"];
+        };
+        /**
          * FailedKeyUpdate
          * @description Failed key update with reason
          */
@@ -24380,7 +24513,7 @@ export interface components {
          */
         HTTPAuthSecurityScheme: {
             /** Bearerformat */
-            bearerFormat: string | null;
+            bearerFormat?: string | null;
             /** Description */
             description?: string | null;
             /** Scheme */
@@ -28617,7 +28750,7 @@ export interface components {
             description?: string | null;
             flows: components["schemas"]["OAuthFlows"];
             /** Oauth2Metadataurl */
-            oauth2MetadataUrl: string | null;
+            oauth2MetadataUrl?: string | null;
             /**
              * Type
              * @constant
@@ -28722,6 +28855,65 @@ export interface components {
         OrganizationRequest: {
             /** Organizations */
             organizations: string[];
+        };
+        /**
+         * OrganizationUpdateRequestV2
+         * @description Typed PATCH body for ``/v2/organization/{organization_id}`` (RFC 7396 merge-patch).
+         *
+         *     Presence is read from ``model_fields_set``, so a sent field is written and an omitted one is
+         *     left untouched. ``extra="forbid"`` makes an unknown key a 422 rather than a silent no-op, since
+         *     the contract hinges on which keys are present. See the endpoint for the per-field clear tokens.
+         */
+        OrganizationUpdateRequestV2: {
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Max Parallel Requests */
+            max_parallel_requests?: number | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Max Budget */
+            model_max_budget?: {
+                [key: string]: unknown;
+            } | null;
+            /** Models */
+            models?: string[] | null;
+            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
+            /** Organization Alias */
+            organization_alias?: string | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+        };
+        /**
+         * PageLinks
+         * @description Hypermedia for a paginated list. No `first`/`last`: without a total count the last page is unknown.
+         */
+        PageLinks: {
+            /** Next */
+            next?: string | null;
+            /** Prev */
+            prev?: string | null;
+            /** Self */
+            self: string;
+        };
+        /**
+         * PageMeta
+         * @description `has_more` rather than `total_count`, which would need a COUNT(*) over the whole match set per keystroke.
+         */
+        PageMeta: {
+            /** Has More */
+            has_more: boolean;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
         };
         /**
          * PaginatedAuditLogResponse
@@ -28888,6 +29080,106 @@ export interface components {
         PatchPromptRequest: {
             litellm_params?: components["schemas"]["PromptLiteLLMParams"] | null;
             prompt_info?: components["schemas"]["PromptInfo"] | null;
+        };
+        /**
+         * PatchTeamRequest
+         * @description Body of PATCH /team/{team_id}.
+         *
+         *     Identical to UpdateTeamRequest except team_id is optional, because PATCH takes it
+         *     from the path. A team_id in the body is still accepted when it matches the path.
+         */
+        PatchTeamRequest: {
+            /** Access Group Ids */
+            access_group_ids?: string[] | null;
+            /** Allowed Passthrough Routes */
+            allowed_passthrough_routes?: unknown[] | null;
+            /** Allowed Vector Store Indexes */
+            allowed_vector_store_indexes?: components["schemas"]["AllowedVectorStoreIndexItem"][] | null;
+            /** Blocked */
+            blocked?: boolean | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Default Team Member Models */
+            default_team_member_models?: string[] | null;
+            /** Disable Global Guardrails */
+            disable_global_guardrails?: boolean | null;
+            /** Enforced Batch Output Expires After */
+            enforced_batch_output_expires_after?: {
+                [key: string]: unknown;
+            } | null;
+            /** Enforced File Expires After */
+            enforced_file_expires_after?: {
+                [key: string]: unknown;
+            } | null;
+            /** Guardrails */
+            guardrails?: string[] | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Mcp Rpm Limit */
+            mcp_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Aliases */
+            model_aliases?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Models */
+            models?: unknown[] | null;
+            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
+            /** Organization Id */
+            organization_id?: string | null;
+            /** Policies */
+            policies?: string[] | null;
+            /** Prompts */
+            prompts?: string[] | null;
+            /** Router Settings */
+            router_settings?: {
+                [key: string]: unknown;
+            } | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Secret Manager Settings */
+            secret_manager_settings?: {
+                [key: string]: unknown;
+            } | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+            /** Tags */
+            tags?: unknown[] | null;
+            /** Team Alias */
+            team_alias?: string | null;
+            /** Team Id */
+            team_id?: string | null;
+            /** Team Member Budget */
+            team_member_budget?: number | null;
+            /** Team Member Budget Duration */
+            team_member_budget_duration?: string | null;
+            /** Team Member Key Duration */
+            team_member_key_duration?: string | null;
+            /** Team Member Model Group Max Budget */
+            team_member_model_group_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
+            /** Team Member Rpm Limit */
+            team_member_rpm_limit?: number | null;
+            /** Team Member Tpm Limit */
+            team_member_tpm_limit?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
         };
         /**
          * PerTestingCriteriaResult
@@ -30769,6 +31061,11 @@ export interface components {
              */
             generic_client_secret?: string | null;
             /**
+             * Generic Scope
+             * @description Space-separated OAuth scopes requested from the generic provider, e.g. 'openid email profile'
+             */
+            generic_scope?: string | null;
+            /**
              * Generic Token Endpoint
              * @description Token endpoint URL for generic OAuth provider
              */
@@ -30810,6 +31107,26 @@ export interface components {
             proxy_base_url?: string | null;
             /** @description Configuration for mapping SSO groups to LiteLLM roles based on group claims in the SSO token */
             role_mappings?: components["schemas"]["RoleMappings"] | null;
+            /**
+             * Saml Allow Unsolicited
+             * @description 'true' to accept IdP-initiated (unsolicited) SAML responses, which cannot be browser-bound against login CSRF
+             */
+            saml_allow_unsolicited?: string | null;
+            /**
+             * Saml Idp Metadata Url
+             * @description URL of the SAML IdP metadata to fetch and parse for SSO authentication
+             */
+            saml_idp_metadata_url?: string | null;
+            /**
+             * Saml Idp Metadata Xml
+             * @description Inline SAML IdP metadata XML, used when a metadata URL is not available
+             */
+            saml_idp_metadata_xml?: string | null;
+            /**
+             * Saml Sp Entity Id
+             * @description SAML Service Provider entityID; defaults to the proxy's /sso/saml/metadata URL
+             */
+            saml_sp_entity_id?: string | null;
             /** @description Configuration for mapping SSO JWT fields to team IDs. Takes precedence over config file settings. */
             team_mappings?: components["schemas"]["TeamMappings"] | null;
             /**
@@ -30831,6 +31148,10 @@ export interface components {
             /** Field Schema */
             field_schema: {
                 [key: string]: unknown;
+            };
+            /** Provenance */
+            provenance?: {
+                [key: string]: string;
             };
             /** Values */
             values: {
@@ -43148,6 +43469,46 @@ export interface operations {
             };
         };
     };
+    list_spend_log_end_users_management_v1_spend_logs_end_users_get: {
+        parameters: {
+            query: {
+                /** @description Window start (UTC when no offset is given) */
+                "filter[startTime][gte]": string;
+                /** @description Window end (UTC when no offset is given) */
+                "filter[startTime][lte]": string;
+                /** @description Case-insensitive partial match on the end user id */
+                q?: string | null;
+                /** @description Page number */
+                page?: number;
+                /** @description Page size */
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacetListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     test_connection_mcp_rest_test_connection_post: {
         parameters: {
             query?: never;
@@ -49672,6 +50033,77 @@ export interface operations {
             };
         };
     };
+    saml_callback_sso_saml_callback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    saml_login_sso_saml_login_get: {
+        parameters: {
+            query?: {
+                return_to?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    saml_metadata_sso_saml_metadata_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     get_tag_daily_activity_tag_daily_activity_get: {
         parameters: {
             query?: {
@@ -50765,7 +51197,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PatchTeamRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -57716,6 +58152,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_organization_v2_v2_organization__organization_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organization_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationUpdateRequestV2"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_OrganizationTableWithMembers"];
                 };
             };
             /** @description Validation Error */

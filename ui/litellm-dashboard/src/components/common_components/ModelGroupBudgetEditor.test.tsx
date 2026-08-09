@@ -1,6 +1,7 @@
 import React, { useState } from "react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import ModelGroupBudgetEditor, { ModelGroupBudgetValue } from "./ModelGroupBudgetEditor";
 
 vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
@@ -27,20 +28,18 @@ function Harness({ initial }: { initial?: ModelGroupBudgetValue }) {
 describe("ModelGroupBudgetEditor", () => {
   it("renders a row per existing budget keyed by access_group_id", () => {
     render(<Harness initial={{ "ag-1": { max_budget: 50, budget_duration: "30d" } }} />);
-    // the access group name (not the id) is shown in the select
-    expect(screen.getByText("Premium")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Access group")).toHaveValue("Premium");
   });
 
   it("adds a row and emits the keyed budget object on edit", async () => {
+    const user = userEvent.setup();
     render(<Harness />);
-    fireEvent.click(screen.getByText("Add model group budget"));
+    await user.click(screen.getByText("Add model group budget"));
 
-    // first combobox is the access-group select (second is the duration select)
-    const groupSelect = screen.getAllByRole("combobox")[0];
-    fireEvent.mouseDown(groupSelect);
-    fireEvent.click(await screen.findByText("Cheap"));
+    const groupSelect = screen.getByPlaceholderText("Access group");
+    await user.click(groupSelect);
+    await user.click(await screen.findByText("Cheap"));
 
-    // enter a budget amount
     const numberInput = screen.getByPlaceholderText("Max budget (USD)");
     fireEvent.change(numberInput, { target: { value: "12" } });
 
@@ -50,12 +49,13 @@ describe("ModelGroupBudgetEditor", () => {
   });
 
   it("emits tpm_limit and rpm_limit alongside the budget", async () => {
+    const user = userEvent.setup();
     render(<Harness />);
-    fireEvent.click(screen.getByText("Add model group budget"));
+    await user.click(screen.getByText("Add model group budget"));
 
-    const groupSelect = screen.getAllByRole("combobox")[0];
-    fireEvent.mouseDown(groupSelect);
-    fireEvent.click(await screen.findByText("Premium"));
+    const groupSelect = screen.getByPlaceholderText("Access group");
+    await user.click(groupSelect);
+    await user.click(await screen.findByText("Premium"));
 
     fireEvent.change(screen.getByPlaceholderText("Max budget (USD)"), { target: { value: "12" } });
     fireEvent.change(screen.getByPlaceholderText("TPM limit"), { target: { value: "1000" } });
@@ -66,12 +66,13 @@ describe("ModelGroupBudgetEditor", () => {
   });
 
   it("emits a rate-only row that has no budget", async () => {
+    const user = userEvent.setup();
     render(<Harness />);
-    fireEvent.click(screen.getByText("Add model group budget"));
+    await user.click(screen.getByText("Add model group budget"));
 
-    const groupSelect = screen.getAllByRole("combobox")[0];
-    fireEvent.mouseDown(groupSelect);
-    fireEvent.click(await screen.findByText("Cheap"));
+    const groupSelect = screen.getByPlaceholderText("Access group");
+    await user.click(groupSelect);
+    await user.click(await screen.findByText("Cheap"));
 
     fireEvent.change(screen.getByPlaceholderText("RPM limit"), { target: { value: "5" } });
 
@@ -88,10 +89,7 @@ describe("ModelGroupBudgetEditor", () => {
 
   it("removes a row and drops it from the emitted value", () => {
     render(<Harness initial={{ "ag-1": { max_budget: 50, budget_duration: "30d" } }} />);
-    // the delete button is the only icon button in the row
-    const buttons = screen.getAllByRole("button");
-    const deleteBtn = buttons.find((b) => b.querySelector(".anticon-delete"));
-    fireEvent.click(deleteBtn as HTMLElement);
+    fireEvent.click(screen.getByRole("button", { name: "Remove model group budget 1" }));
 
     const emitted = JSON.parse(screen.getByTestId("emitted").textContent || "{}");
     expect(emitted["ag-1"]).toBeUndefined();

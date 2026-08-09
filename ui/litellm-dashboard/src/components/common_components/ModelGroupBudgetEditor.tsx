@@ -1,11 +1,12 @@
-import React, { useEffect, useRef, useState } from "react";
-import { Button, Select, Space, Typography } from "antd";
-import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
-import { useAccessGroups, AccessGroupResponse } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
-import NumericalInput from "../shared/numerical_input";
-import DurationSelect from "./DurationSelect";
+"use client";
 
-const { Text } = Typography;
+import React, { useEffect, useRef, useState } from "react";
+import { Plus, Trash2 } from "lucide-react";
+import { type AccessGroupResponse, useAccessGroups } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SearchSelect, type SearchSelectOption } from "../shared/SearchSelect";
 
 export interface ModelGroupBudgetConfig {
   max_budget?: number;
@@ -14,7 +15,6 @@ export interface ModelGroupBudgetConfig {
   rpm_limit?: number;
 }
 
-/** Map of access_group_id -> budget config. */
 export type ModelGroupBudgetValue = Record<string, ModelGroupBudgetConfig>;
 
 interface EditorRow {
@@ -30,20 +30,31 @@ interface ModelGroupBudgetEditorProps {
   onChange?: (value: ModelGroupBudgetValue) => void;
 }
 
-const isSet = (n?: number): n is number => n !== undefined && n !== null;
+const DURATION_OPTIONS = [
+  { label: "Daily", value: "24h" },
+  { label: "Weekly", value: "7d" },
+  { label: "Monthly", value: "30d" },
+] as const;
 
-const rowsToValue = (rows: EditorRow[]): ModelGroupBudgetValue =>
-  rows.reduce<ModelGroupBudgetValue>((acc, row) => {
-    if (row.groupId && (isSet(row.max_budget) || isSet(row.tpm_limit) || isSet(row.rpm_limit))) {
-      acc[row.groupId] = {
+const isSet = (value?: number): value is number => value !== undefined;
+
+const rowsToValue = (rows: readonly EditorRow[]): ModelGroupBudgetValue =>
+  Object.fromEntries(
+    rows.flatMap((row) => {
+      const hasLimit = isSet(row.max_budget) || isSet(row.tpm_limit) || isSet(row.rpm_limit);
+      if (!row.groupId || !hasLimit) {
+        return [];
+      }
+
+      const config: ModelGroupBudgetConfig = {
         ...(isSet(row.max_budget) ? { max_budget: row.max_budget } : {}),
         ...(row.budget_duration ? { budget_duration: row.budget_duration } : {}),
         ...(isSet(row.tpm_limit) ? { tpm_limit: row.tpm_limit } : {}),
         ...(isSet(row.rpm_limit) ? { rpm_limit: row.rpm_limit } : {}),
       };
-    }
-    return acc;
-  }, {});
+      return [[row.groupId, config] as const];
+    }),
+  );
 
 const valueToRows = (value?: ModelGroupBudgetValue): EditorRow[] =>
   Object.entries(value ?? {}).map(([groupId, cfg]) => ({
@@ -54,21 +65,11 @@ const valueToRows = (value?: ModelGroupBudgetValue): EditorRow[] =>
     rpm_limit: cfg?.rpm_limit,
   }));
 
-/**
- * Editor for per-access-group dollar budgets and TPM/RPM limits.
- *
- * - Each row binds one access group (by access_group_id) to a max budget + reset window
- *   and/or a TPM/RPM rate limit.
- * - Emits a `{ access_group_id: { max_budget, budget_duration, tpm_limit, rpm_limit } }`
- *   object via onChange, so it drops directly into an Ant Design `<Form.Item>`.
- */
 const ModelGroupBudgetEditor: React.FC<ModelGroupBudgetEditorProps> = ({ value, onChange }) => {
   const { data: accessGroups, isLoading } = useAccessGroups();
   const [rows, setRows] = useState<EditorRow[]>(() => valueToRows(value));
   const lastEmitted = useRef<string>(JSON.stringify(value ?? {}));
 
-  // Re-seed from an externally supplied value (e.g. form reset on edit load),
-  // but ignore the echo of our own onChange to avoid a render loop.
   useEffect(() => {
     const incoming = JSON.stringify(value ?? {});
     if (incoming !== lastEmitted.current) {
@@ -87,72 +88,96 @@ const ModelGroupBudgetEditor: React.FC<ModelGroupBudgetEditorProps> = ({ value, 
   const updateRow = (index: number, patch: Partial<EditorRow>) =>
     emit(rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
 
-  const usedGroupIds = new Set(rows.map((r) => r.groupId).filter(Boolean) as string[]);
+  const usedGroupIds = new Set(rows.flatMap((row) => (row.groupId ? [row.groupId] : [])));
 
-  const groupOptions = (accessGroups ?? []).map((group: AccessGroupResponse) => ({
+  const groupOptions: SearchSelectOption[] = (accessGroups ?? []).map((group: AccessGroupResponse) => ({
     label: group.access_group_name,
     value: group.access_group_id,
   }));
 
   return (
-    <div>
-      {rows.length === 0 && <Text className="text-xs text-gray-500 mb-2">No model group budgets set.</Text>}
+    <div className="flex flex-col gap-3">
+      {rows.length === 0 && <p className="text-xs text-muted-foreground">No model group budgets set.</p>}
       {rows.map((row, index) => (
-        <Space key={index} align="baseline" className="mb-2" style={{ display: "flex" }}>
-          <Select
-            showSearch
-            placeholder="Access group"
-            loading={isLoading}
-            style={{ width: 220 }}
+        <div
+          key={`${row.groupId ?? "new"}-${index}`}
+          className="grid grid-cols-1 items-center gap-2 rounded-lg border border-border p-3 lg:grid-cols-[minmax(12rem,1.4fr)_repeat(4,minmax(8rem,1fr))_auto]"
+        >
+          <SearchSelect
+            options={groupOptions.filter((option) => option.value === row.groupId || !usedGroupIds.has(option.value))}
             value={row.groupId}
-            optionFilterProp="label"
-            onChange={(groupId) => updateRow(index, { groupId })}
-            options={groupOptions.map((opt) => ({
-              ...opt,
-              disabled: opt.value !== row.groupId && usedGroupIds.has(opt.value),
-            }))}
+            onValueChange={(groupId) => updateRow(index, { groupId: groupId || undefined })}
+            placeholder="Access group"
+            emptyText="No access groups"
+            disabled={isLoading}
           />
-          <NumericalInput
+          <Input
+            type="number"
             step={0.01}
             min={0}
             placeholder="Max budget (USD)"
-            style={{ width: 160 }}
-            value={row.max_budget}
+            aria-label={`Max budget ${index + 1}`}
+            value={row.max_budget ?? ""}
             onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
               const raw = e.target.value;
               updateRow(index, { max_budget: raw === "" ? undefined : Number(raw) });
             }}
           />
-          <DurationSelect
-            value={row.budget_duration}
-            onChange={(budget_duration) => updateRow(index, { budget_duration })}
-          />
-          <NumericalInput
+          <Select
+            items={DURATION_OPTIONS}
+            value={row.budget_duration ?? null}
+            onValueChange={(budgetDuration: string | null) =>
+              updateRow(index, { budget_duration: budgetDuration ?? undefined })
+            }
+          >
+            <SelectTrigger aria-label={`Budget duration ${index + 1}`} className="w-full">
+              <SelectValue placeholder="Reset window" />
+            </SelectTrigger>
+            <SelectContent>
+              {DURATION_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Input
+            type="number"
             step={1}
             min={0}
             placeholder="TPM limit"
-            style={{ width: 130 }}
-            value={row.tpm_limit}
+            aria-label={`TPM limit ${index + 1}`}
+            value={row.tpm_limit ?? ""}
             onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
               const raw = e.target.value;
               updateRow(index, { tpm_limit: raw === "" ? undefined : Number(raw) });
             }}
           />
-          <NumericalInput
+          <Input
+            type="number"
             step={1}
             min={0}
             placeholder="RPM limit"
-            style={{ width: 130 }}
-            value={row.rpm_limit}
+            aria-label={`RPM limit ${index + 1}`}
+            value={row.rpm_limit ?? ""}
             onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
               const raw = e.target.value;
               updateRow(index, { rpm_limit: raw === "" ? undefined : Number(raw) });
             }}
           />
-          <Button type="text" icon={<DeleteOutlined />} onClick={() => emit(rows.filter((_, i) => i !== index))} />
-        </Space>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label={`Remove model group budget ${index + 1}`}
+            onClick={() => emit(rows.filter((_, rowIndex) => rowIndex !== index))}
+          >
+            <Trash2 />
+          </Button>
+        </div>
       ))}
-      <Button type="dashed" icon={<PlusOutlined />} onClick={() => emit([...rows, {}])} style={{ width: "100%" }}>
+      <Button type="button" variant="outline" className="w-full" onClick={() => emit([...rows, {}])}>
+        <Plus />
         Add model group budget
       </Button>
     </div>

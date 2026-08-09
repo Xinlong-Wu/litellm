@@ -12,7 +12,7 @@ import fnmatch
 import re
 import secrets
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterator, List, NamedTuple, Optional, Protocol, Tuple, Union, cast
+from typing import Any, Dict, List, NamedTuple, Optional, Protocol, Tuple, Union, cast
 
 import fastapi
 import orjson
@@ -22,7 +22,11 @@ from fastapi.security.api_key import APIKeyHeader
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
-from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+from litellm.constants import (
+    GLOBAL_PROXY_SPEND_CACHE_KEY,
+    LITELLM_PROXY_BUDGET_NAME,
+    LITELLM_PROXY_MASTER_KEY_ALIAS,
+)
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.integrations.otel.runtime import phase_span, seed_request_identity
 from litellm.litellm_core_utils.dd_tracing import tracer
@@ -58,6 +62,7 @@ from litellm.proxy.auth.auth_utils import (
     get_model_from_request,
     get_request_route,
     get_request_route_template,
+    iter_request_fallback_targets,
     normalize_request_route,
     pre_db_read_auth_checks,
     route_in_additonal_public_routes,
@@ -505,13 +510,16 @@ async def _fetch_global_spend_with_event_coordination(
     """
     Fetch global spend with event-driven coordination to prevent cache stampede.
     Uses EventDrivenCacheCoordinator: first request queries DB and signals others when done.
+
+    Reads the proxy budget aggregate user row, which accrues proxy-wide spend
+    per request and is zeroed by ResetBudgetJob every ``litellm.budget_duration``.
     """
 
     async def _load_global_spend() -> Optional[float]:
-        sql_query = """SELECT SUM(spend) AS total_spend FROM "MonthlyGlobalSpend";"""
-        response = await prisma_client.db.query_raw(query=sql_query)
-        val = response[0]["total_spend"]
-        return float(val) if val is not None else None
+        proxy_budget_row = await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": LITELLM_PROXY_BUDGET_NAME}
+        )
+        return float(proxy_budget_row.spend) if proxy_budget_row is not None else None
 
     return await _global_spend_coordinator.get_or_load(
         cache_key=cache_key,
@@ -530,7 +538,7 @@ async def get_global_proxy_spend(
     global_proxy_spend = None
     if litellm.max_budget > 0 and prisma_client is not None:  # user set proxy max budget
         # Use event-driven coordination to prevent cache stampede
-        cache_key = "{}:spend".format(litellm_proxy_admin_name)
+        cache_key = GLOBAL_PROXY_SPEND_CACHE_KEY
         global_proxy_spend = await _fetch_global_spend_with_event_coordination(
             cache_key=cache_key,
             user_api_key_cache=user_api_key_cache,
@@ -1261,6 +1269,7 @@ async def _user_api_key_auth_builder(
                     team_id = result["team_id"]
                     team_object = result["team_object"]
                     user_id = result["user_id"]
+                    user_email = result["user_email"]
                     user_object = result["user_object"]
                     end_user_id = result["end_user_id"]
                     org_id = result["org_id"]
@@ -1285,6 +1294,7 @@ async def _user_api_key_auth_builder(
                             api_key=None,
                             user_role=LitellmUserRoles.PROXY_ADMIN,
                             user_id=user_id,
+                            user_email=user_email,
                             team_id=team_id,
                             team_alias=(team_object.team_alias if team_object is not None else None),
                             team_tpm_limit=(team_object.tpm_limit if team_object is not None else None),
@@ -1310,6 +1320,7 @@ async def _user_api_key_auth_builder(
                             else LitellmUserRoles.INTERNAL_USER
                         ),
                         user_id=user_id,
+                        user_email=user_email,
                         org_id=org_id,
                         parent_otel_span=parent_otel_span,
                         end_user_id=end_user_id,
@@ -1351,6 +1362,7 @@ async def _user_api_key_auth_builder(
                         )
                         if auto_registered is not None:
                             auto_registered.jwt_claims = jwt_claims
+                            auto_registered.user_email = user_email
                             valid_token = auto_registered
                             api_key = valid_token.token or ""
 
@@ -1498,6 +1510,13 @@ async def _user_api_key_auth_builder(
                             check_cache_only=True,
                         ).resolve(hashed_token=hash_token(api_key))
                     )
+                # Key-cache entries are written only after the proxy validated a
+                # virtual key or the master key, but via_virtual_key is exclude=True
+                # so serialization drops it; restore it at this trusted boundary.
+                # The UI-login JWT fallback below constructs its token from a
+                # decrypted blob, not this cache, and stays unmarked.
+                if isinstance(valid_token, UserAPIKeyAuth):
+                    valid_token.via_virtual_key = True
             except Exception:
                 verbose_logger.debug("api key not found in cache.")
                 valid_token = None
@@ -1610,6 +1629,7 @@ async def _user_api_key_auth_builder(
             _user_api_key_obj = update_valid_token_with_end_user_params(
                 valid_token=_user_api_key_obj, end_user_params=end_user_params
             )
+            _user_api_key_obj.via_virtual_key = True
 
             return _user_api_key_obj
 
@@ -1962,7 +1982,7 @@ async def _user_api_key_auth_builder(
 
             global_proxy_spend = None
             if litellm.max_budget > 0 and prisma_client is not None:  # user set proxy max budget
-                cache_key = "{}:spend".format(litellm_proxy_admin_name)
+                cache_key = GLOBAL_PROXY_SPEND_CACHE_KEY
                 with tracer.trace("litellm.proxy.auth.get_global_proxy_spend"):
                     global_proxy_spend = await _fetch_global_spend_with_event_coordination(
                         cache_key=cache_key,
@@ -2012,7 +2032,7 @@ async def _user_api_key_auth_builder(
             # No token was found when looking up in the DB
             raise Exception("Invalid proxy server token passed")
         if valid_token_dict is not None:
-            return await _return_user_api_key_auth_obj(
+            virtual_key_auth_obj = await _return_user_api_key_auth_obj(
                 user_obj=user_obj,
                 api_key=api_key,
                 parent_otel_span=parent_otel_span,
@@ -2020,6 +2040,8 @@ async def _user_api_key_auth_builder(
                 route=route,
                 start_time=start_time,
             )
+            virtual_key_auth_obj.via_virtual_key = True
+            return virtual_key_auth_obj
     except Exception as e:
         return await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
             e=e,
@@ -2435,7 +2457,7 @@ async def _reserve_budget_after_common_checks(
         proxy_logging_obj=proxy_logging_obj,
         end_user_id=end_user_id,
         end_user_object=end_user_object,
-        skip_user_budget_on_team_key=general_settings.get("skip_user_budget_on_team_key") is True,
+        fail_closed_budget_enforcement=general_settings.get("fail_closed_budget_enforcement") is True,
     )
 
 
@@ -2797,19 +2819,11 @@ async def _enforce_key_and_fallback_model_access(
                 llm_router=llm_router,
             )
 
-        # Validate every fallback model name reachable by this request.
-        # All three fields (``fallbacks``, ``context_window_fallbacks``,
-        # ``content_policy_fallbacks``) are forwarded to the router as
-        # per-request kwargs whether they appear at the top level of
-        # ``request_data`` or nested under ``router_settings_override``.
-        # Both surfaces must be validated against the API key's model
-        # allowlist or a caller can smuggle a restricted model. VERIA-44.
-        fallback_names: List[str] = []
-        override_settings = request_data.get("router_settings_override")
-        for _fb_key in ROUTER_FALLBACK_FIELDS:
-            fallback_names.extend(iter_router_fallback_model_names(request_data.get(_fb_key)))
-            if isinstance(override_settings, dict):
-                fallback_names.extend(iter_router_fallback_model_names(override_settings.get(_fb_key)))
+        fallback_names = tuple(
+            name
+            for target in iter_request_fallback_targets(request_data)
+            if (name := _fallback_target_model_name(target)) is not None
+        )
 
         for _name in dict.fromkeys(fallback_names):  # dedupe, preserve order
             await can_key_call_model(
@@ -2825,36 +2839,14 @@ async def _enforce_key_and_fallback_model_access(
             )
 
 
-ROUTER_FALLBACK_FIELDS: Tuple[str, ...] = (
-    "fallbacks",
-    "context_window_fallbacks",
-    "content_policy_fallbacks",
-)
-
-
-def iter_router_fallback_model_names(fallbacks: Any) -> Iterator[str]:
-    """Yield leaf model names from any of the supported fallbacks shapes.
-
-    Handles the simple top-level shape (``str`` or ``{"model": str}``) and
-    the nested router-config shape (``[{primary: [fallback_list]}]``).
-    """
-    if not isinstance(fallbacks, list):
-        return
-    for entry in fallbacks:
-        if isinstance(entry, str):
-            yield entry
-        elif isinstance(entry, dict):
-            if isinstance(entry.get("model"), str):
-                yield entry["model"]
-                continue
-            for fallback_list in entry.values():
-                if not isinstance(fallback_list, list):
-                    continue
-                for m in fallback_list:
-                    if isinstance(m, str):
-                        yield m
-                    elif isinstance(m, dict) and isinstance(m.get("model"), str):
-                        yield m["model"]
+def _fallback_target_model_name(target: object) -> str | None:
+    if isinstance(target, str):
+        return target
+    if isinstance(target, dict):
+        model = target.get("model")
+        if isinstance(model, str):
+            return model
+    return None
 
 
 async def _run_post_custom_auth_checks(
