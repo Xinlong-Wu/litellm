@@ -117,6 +117,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
     get_hidden_params_dict,
 )
 from litellm.types.utils import (
+    CallTypes,
     ModelResponse,
     ModelResponseStream,
     TextCompletionResponse,
@@ -7365,6 +7366,43 @@ _SSE_FRAME_DELIMITERS = ("\r\n\r\n", "\n\n", "\r\r")
 _MAX_RAW_SSE_BUFFER_CHARS = 8 * 1024 * 1024
 
 
+def _is_responses_stream_request(request_data: Mapping[str, Any]) -> bool:
+    logging_obj = request_data.get("litellm_logging_obj")
+    if isinstance(logging_obj, dict):
+        call_type = logging_obj.get("call_type")
+    else:
+        call_type = getattr(logging_obj, "call_type", None)
+    return call_type in (CallTypes.responses.value, CallTypes.aresponses.value)
+
+
+def _responses_error_event_from_exception(exception: Exception, error_message: str) -> Mapping[str, Any]:
+    current_exception: Exception | None = exception
+    for _ in range(8):
+        if current_exception is None:
+            break
+        error_event = getattr(current_exception, "_litellm_response_error_event", None)
+        if isinstance(error_event, dict) and error_event.get("type") == "error":
+            return error_event
+        original_exception = getattr(current_exception, "original_exception", None)
+        if not isinstance(original_exception, Exception) or original_exception is current_exception:
+            break
+        current_exception = original_exception
+
+    raw_code = getattr(exception, "code", None)
+    if raw_code is None:
+        raw_code = getattr(exception, "status_code", 500)
+    raw_message = getattr(exception, "message", None)
+    raw_param = getattr(exception, "param", None)
+    raw_sequence_number = getattr(exception, "sequence_number", 0)
+    return {
+        "type": "error",
+        "code": str(raw_code) if raw_code is not None else None,
+        "message": raw_message if isinstance(raw_message, str) else error_message,
+        "param": raw_param if isinstance(raw_param, str) else None,
+        "sequence_number": raw_sequence_number if isinstance(raw_sequence_number, int) else 0,
+    }
+
+
 def _pop_complete_sse_frame(buffer: str) -> tuple[str | None, str]:
     delimiter_positions = [
         (position, delimiter) for delimiter in _SSE_FRAME_DELIMITERS if (position := buffer.find(delimiter)) != -1
@@ -7560,13 +7598,16 @@ async def async_data_generator(
             # Including it in the SSE response leaks internal details to clients.
             error_msg = str(e)
 
-        proxy_exception = ProxyException(
-            message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
-        )
-        error_returned = json.dumps({"error": proxy_exception.to_dict()})
+        if _is_responses_stream_request(request_data):
+            error_returned = json.dumps(_responses_error_event_from_exception(e, error_msg))
+        else:
+            proxy_exception = ProxyException(
+                message=getattr(e, "message", error_msg),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", 500),
+            )
+            error_returned = json.dumps({"error": proxy_exception.to_dict()})
         stream_completed = True
         yield f"data: {error_returned}\n\n"
     finally:
