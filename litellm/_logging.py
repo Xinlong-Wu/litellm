@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 from logging import Formatter
 from logging.handlers import TimedRotatingFileHandler
-from typing import Any
+from typing import Any, Final
 
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -52,7 +52,7 @@ if set_verbose is True:
         "`litellm.set_verbose` is deprecated. Please set `os.environ['LITELLM_LOG'] = 'DEBUG'` for debug logs."
     )
 
-_ENABLE_SECRET_REDACTION = os.getenv("LITELLM_DISABLE_REDACT_SECRETS", "").lower() != "true"
+_ENABLE_SECRET_REDACTION: Final = os.getenv("LITELLM_DISABLE_REDACT_SECRETS", "").lower() != "true"
 
 
 def _redact_string(value: str) -> str:
@@ -109,14 +109,14 @@ class SecretRedactionFilter(logging.Filter):
         return True
 
 
-_secret_filter = SecretRedactionFilter()
+_secret_filter: Final = SecretRedactionFilter()
 
 
 json_logs = bool(os.getenv("JSON_LOGS", False))
 # Create a handler for the logger (you may need to adapt this based on your needs)
-log_level = os.getenv("LITELLM_LOG", "DEBUG")
-numeric_level: str = getattr(logging, log_level.upper())
-handler = logging.StreamHandler()
+log_level: Final = os.getenv("LITELLM_LOG", "DEBUG")
+numeric_level: Final[str] = getattr(logging, log_level.upper())
+handler: Final = logging.StreamHandler()
 handler.setLevel(numeric_level)
 handler.addFilter(_secret_filter)
 
@@ -129,10 +129,10 @@ def _try_parse_json_message(message: str) -> dict[str, Any] | None:
     """
     if not message or not isinstance(message, str):
         return None
-    msg_stripped = message.strip()
+    msg_stripped: Final = message.strip()
     if not (msg_stripped.startswith("{") or msg_stripped.startswith("[")):
         return None
-    parsed = safe_json_loads(message, default=None)
+    parsed: Final = safe_json_loads(message, default=None)
     if parsed is None or not isinstance(parsed, dict):
         return None
     return parsed
@@ -179,7 +179,7 @@ def _get_standard_record_attrs() -> frozenset:
     return frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__dict__.keys())
 
 
-_STANDARD_RECORD_ATTRS = _get_standard_record_attrs()
+_STANDARD_RECORD_ATTRS: Final = _get_standard_record_attrs()
 
 
 class JsonFormatter(Formatter):
@@ -188,12 +188,12 @@ class JsonFormatter(Formatter):
 
     def formatTime(self, record, datefmt=None):
         # Use datetime to format the timestamp in ISO 8601 format
-        dt = datetime.fromtimestamp(record.created)
+        dt: Final = datetime.fromtimestamp(record.created)
         return dt.isoformat()
 
     def format(self, record):
-        message_str = record.getMessage()
-        json_record: dict[str, Any] = {
+        message_str: Final = record.getMessage()
+        json_record: Final[dict[str, Any]] = {
             "message": message_str,
             "level": record.levelname,
             "timestamp": self.formatTime(record),
@@ -228,13 +228,13 @@ class JsonFormatter(Formatter):
 # Function to set up exception handlers for JSON logging
 def _setup_json_exception_handlers(formatter):
     # Create a handler with JSON formatting for exceptions
-    error_handler = logging.StreamHandler()
+    error_handler: Final = logging.StreamHandler()
     error_handler.setFormatter(formatter)
     error_handler.addFilter(_secret_filter)
 
     # Setup excepthook for uncaught exceptions
     def json_excepthook(exc_type, exc_value, exc_traceback):
-        record = logging.LogRecord(
+        record: Final = logging.LogRecord(
             name="LiteLLM",
             level=logging.ERROR,
             pathname="",
@@ -252,10 +252,10 @@ def _setup_json_exception_handlers(formatter):
         import asyncio
 
         def async_json_exception_handler(loop, context):
-            exception = context.get("exception")
+            exception: Final = context.get("exception")
             if exception:
-                exc_type = type(exception)
-                record = logging.LogRecord(
+                exc_type: Final = type(exception)
+                record: Final = logging.LogRecord(
                     name="LiteLLM",
                     level=logging.ERROR,
                     pathname="",
@@ -278,7 +278,7 @@ if json_logs:
     handler.setFormatter(JsonFormatter())
     _setup_json_exception_handlers(JsonFormatter())
 else:
-    formatter = logging.Formatter(
+    formatter: Final = logging.Formatter(
         "\033[92m%(asctime)s - %(name)s:%(levelname)s\033[0m: %(filename)s:%(lineno)s - %(message)s",
         datefmt="%H:%M:%S",
     )
@@ -298,20 +298,54 @@ verbose_logger.addHandler(handler)
 def _suppress_loggers():
     """Suppress noisy loggers at INFO level"""
     # Suppress httpx request logging at INFO level
-    httpx_logger = logging.getLogger("httpx")
+    httpx_logger: Final = logging.getLogger("httpx")
     httpx_logger.setLevel(logging.WARNING)
 
     # Suppress APScheduler logging at INFO level
-    apscheduler_executors_logger = logging.getLogger("apscheduler.executors.default")
+    apscheduler_executors_logger: Final = logging.getLogger("apscheduler.executors.default")
     apscheduler_executors_logger.setLevel(logging.WARNING)
-    apscheduler_scheduler_logger = logging.getLogger("apscheduler.scheduler")
+    apscheduler_scheduler_logger: Final = logging.getLogger("apscheduler.scheduler")
     apscheduler_scheduler_logger.setLevel(logging.WARNING)
+
+
+_REDACTED_THIRD_PARTY_LOGGERS: Final[tuple[str, ...]] = (
+    "apscheduler.executors.default",
+    "apscheduler.scheduler",
+    "asyncio",
+    "backoff",
+    "httpx",
+    "uvicorn.error",
+)
+
+
+def _redact_third_party_loggers() -> None:
+    """Extend secret redaction to records litellm does not emit directly.
+
+    litellm's own loggers are covered by the filter on their shared handler, but a
+    litellm value can also reach a log record through a dependency that logs on its
+    own logger. Those records never pass through a litellm handler.
+
+    The filter is attached to each emitting logger rather than to the root logger or
+    to root's handlers. `Logger.handle` applies the emitting logger's filters before
+    any handler runs, so redaction happens once, at the earliest point in the
+    record's life, and covers every downstream handler regardless of who owns it.
+    The alternatives do not hold: `callHandlers` consults ancestors for handlers but
+    never for filters, so a filter on the root logger never sees these records at
+    all, and a filter on a root handler only covers that one handler, leaving
+    handlers registered earlier or on the emitting logger itself untouched.
+
+    Each name is the exact logger a dependency emits on; a parent name would not
+    cover its children, for the same reason the root logger does not.
+    """
+    for name in _REDACTED_THIRD_PARTY_LOGGERS:
+        logging.getLogger(name).addFilter(_secret_filter)
 
 
 # Call the suppression function
 _suppress_loggers()
+_redact_third_party_loggers()
 
-ALL_LOGGERS = [
+ALL_LOGGERS: Final = [
     logging.getLogger(),
     verbose_logger,
     verbose_router_logger,
@@ -328,11 +362,11 @@ def _get_loggers_to_initialize():
     """
     import litellm
 
-    loggers = list(ALL_LOGGERS)
+    loggers: Final = list(ALL_LOGGERS)
 
     # Add langfuse logger if langfuse is being used as a callback
-    langfuse_callbacks = {"langfuse", "langfuse_otel"}
-    all_callbacks = set(litellm.success_callback + litellm.failure_callback)
+    langfuse_callbacks: Final = {"langfuse", "langfuse_otel"}
+    all_callbacks: Final = set(litellm.success_callback + litellm.failure_callback)
     if langfuse_callbacks & all_callbacks:
         loggers.append(logging.getLogger("langfuse"))
 
@@ -574,12 +608,12 @@ def _get_uvicorn_log_config(use_json: bool):
       ``<dir>/uvicorn.log`` (separate from the application log) is added so
       uvicorn access/error logs also land on disk.
     """
-    uvicorn_log_level = log_level.upper()
-    json_formatter_class = "litellm._logging.JsonFormatter"
-    default_fmt = "%(asctime)s %(levelprefix)s %(message)s"
-    access_fmt = '%(asctime)s %(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s'
+    json_formatter_class: Final = "litellm._logging.JsonFormatter"
+    uvicorn_log_level: Final = log_level.upper()
+    default_fmt: Final = "%(asctime)s %(levelprefix)s %(message)s"
+    access_fmt: Final = '%(asctime)s %(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s'
 
-    formatters: dict[str, Any] = {
+    formatters: Final[dict[str, Any]] = {
         "json": {"()": json_formatter_class},
         "default": {
             "()": "uvicorn.logging.DefaultFormatter",
@@ -593,9 +627,23 @@ def _get_uvicorn_log_config(use_json: bool):
         },
     }
 
-    stdout_default_formatter = "json" if use_json else "default"
-    stdout_access_formatter = "json" if use_json else "access"
-    handlers: dict[str, Any] = {
+    stdout_default_formatter: Final = "json" if use_json else "default"
+    stdout_access_formatter: Final = "json" if use_json else "access"
+    uvicorn_log_file: Final = resolve_uvicorn_log_file()
+    file_handler: Final[dict[str, Any]] = (
+        {
+            "file": {
+                "()": "litellm._logging._SharedRotatingFileHandler",
+                "filename": uvicorn_log_file,
+                "lockfile": _lockfile_for(uvicorn_log_file),
+                "backupCount": _get_log_retention_days(),
+                "use_json": use_json,
+            }
+        }
+        if uvicorn_log_file is not None
+        else {}
+    )
+    handlers: Final[dict[str, Any]] = {
         "default": {
             "formatter": stdout_default_formatter,
             "class": "logging.StreamHandler",
@@ -606,25 +654,11 @@ def _get_uvicorn_log_config(use_json: bool):
             "class": "logging.StreamHandler",
             "stream": "ext://sys.stdout",
         },
+        **file_handler,
     }
 
-    default_handlers = ["default"]
-    access_handlers = ["access"]
-
-    uvicorn_log_file = resolve_uvicorn_log_file()
-    if uvicorn_log_file:
-        # One shared, multi-process-safe file handler for all uvicorn loggers.
-        # It self-formats (JSON or plain text) and rotates daily via flock, so no
-        # dictConfig formatter is attached here.
-        handlers["file"] = {
-            "()": "litellm._logging._SharedRotatingFileHandler",
-            "filename": uvicorn_log_file,
-            "lockfile": _lockfile_for(uvicorn_log_file),
-            "backupCount": _get_log_retention_days(),
-            "use_json": use_json,
-        }
-        default_handlers = ["default", "file"]
-        access_handlers = ["access", "file"]
+    default_handlers: Final = ["default", "file"] if uvicorn_log_file is not None else ["default"]
+    access_handlers: Final = ["access", "file"] if uvicorn_log_file is not None else ["access"]
 
     return {
         "version": 1,
@@ -662,7 +696,7 @@ def _turn_on_json():
 
     - Adds a JSON formatter to all loggers
     """
-    handler = logging.StreamHandler()
+    handler: Final = logging.StreamHandler()
     handler.setFormatter(JsonFormatter())
     _initialize_loggers_with_handler(handler)
     # Keep file logging (now JSON-formatted) after handlers were cleared above

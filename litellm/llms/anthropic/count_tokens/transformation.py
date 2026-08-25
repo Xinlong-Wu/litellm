@@ -5,7 +5,7 @@ This module handles the transformation of requests to Anthropic's CountTokens AP
 """
 
 import os
-from typing import Any
+from typing import Any, Final
 
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
 
@@ -37,17 +37,19 @@ class AnthropicCountTokensConfig:
         Returns:
             The endpoint URL for the CountTokens API
         """
-        count_tokens_path = "/v1/messages/count_tokens"
-        base = api_base or os.getenv("ANTHROPIC_COUNT_TOKENS_API_BASE") or os.getenv("ANTHROPIC_API_BASE")
-        if not base:
+        count_tokens_path: Final = "/v1/messages/count_tokens"
+        configured_base: Final = (
+            api_base or os.getenv("ANTHROPIC_COUNT_TOKENS_API_BASE") or os.getenv("ANTHROPIC_API_BASE")
+        )
+        if not configured_base:
             return "https://api.anthropic.com" + count_tokens_path
 
-        base = base.rstrip("/")
-        if base.endswith("/messages/count_tokens"):
-            return base
-        if base.endswith("/v1"):
-            return base + "/messages/count_tokens"
-        return base + count_tokens_path
+        normalized_base: Final = configured_base.rstrip("/")
+        if normalized_base.endswith("/messages/count_tokens"):
+            return normalized_base
+        if normalized_base.endswith("/v1"):
+            return normalized_base + "/messages/count_tokens"
+        return normalized_base + count_tokens_path
 
     def transform_request_to_count_tokens(
         self,
@@ -61,7 +63,7 @@ class AnthropicCountTokensConfig:
 
         Includes optional system and tools fields for accurate token counting.
         """
-        request: dict[str, Any] = {
+        request: Final[dict[str, Any]] = {
             "model": model,
             "messages": messages,
         }

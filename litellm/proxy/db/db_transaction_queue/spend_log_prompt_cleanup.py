@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
-from typing import Mapping
 
 from prisma.errors import PrismaError
 from redis.exceptions import RedisError
@@ -89,7 +89,8 @@ class SpendLogPromptCleanup:
         if retention_seconds is None:
             if retention_setting is not None:
                 verbose_proxy_logger.warning(
-                    f"Invalid maximum_spend_logs_prompt_retention_period value: {retention_setting}"
+                    "Invalid maximum_spend_logs_prompt_retention_period value: %s",
+                    retention_setting,
                 )
             return False
 
@@ -146,12 +147,15 @@ class SpendLogPromptCleanup:
 
             if not isinstance(scrubbed_result, int):
                 verbose_proxy_logger.error(
-                    f"Unexpected execute_raw return type for prompt scrub: {type(scrubbed_result)}; "
-                    "aborting to avoid infinite loop"
+                    "Unexpected execute_raw return type for prompt scrub: %s; aborting to avoid infinite loop",
+                    type(scrubbed_result),
                 )
                 break
 
-            verbose_proxy_logger.info(f"Scrubbed prompt content from {scrubbed_result} logs in this batch")
+            verbose_proxy_logger.info(
+                "Scrubbed prompt content from %d logs in this batch",
+                scrubbed_result,
+            )
 
             if scrubbed_result == 0:
                 break
@@ -187,9 +191,15 @@ class SpendLogPromptCleanup:
                     return
 
             cutoff_date = datetime.now(timezone.utc) - timedelta(seconds=float(self.retention_seconds))
-            verbose_proxy_logger.info(f"Scrubbing prompt content from logs older than {cutoff_date.isoformat()}")
+            verbose_proxy_logger.info(
+                "Scrubbing prompt content from logs older than %s",
+                cutoff_date.isoformat(),
+            )
             total_scrubbed = await self._scrub_old_prompts(prisma_client, cutoff_date)
-            verbose_proxy_logger.info(f"Scrubbed prompt content from {total_scrubbed} logs")
+            verbose_proxy_logger.info(
+                "Scrubbed prompt content from %d logs",
+                total_scrubbed,
+            )
         except SPEND_LOG_PROMPT_CLEANUP_ERROR_TYPES as e:
             verbose_proxy_logger.exception(
                 "Error during spend log prompt scrub: %s: %s",
