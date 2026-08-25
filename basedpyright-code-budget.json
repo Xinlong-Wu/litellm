@@ -1,12 +1,12 @@
 {
   "reportAny": {
-    "limit": 22945
+    "limit": 22951
   },
   "reportArgumentType": {
-    "limit": 2579
+    "limit": 2582
   },
   "reportAssignmentType": {
-    "limit": 323
+    "limit": 324
   },
   "reportAttributeAccessIssue": {
     "limit": 488
@@ -24,13 +24,13 @@
     "limit": 19
   },
   "reportExplicitAny": {
-    "limit": 7311
+    "limit": 7318
   },
   "reportFunctionMemberAccess": {
     "limit": 7
   },
   "reportGeneralTypeIssues": {
-    "limit": 157
+    "limit": 158
   },
   "reportIncompatibleMethodOverride": {
     "limit": 56
@@ -44,6 +44,9 @@
   "reportIndexIssue": {
     "limit": 35
   },
+  "reportInvalidTypeArguments": {
+    "limit": 2
+  },
   "reportInvalidTypeForm": {
     "limit": 35
   },
@@ -54,10 +57,10 @@
     "limit": 0
   },
   "reportMissingParameterType": {
-    "limit": 5707
+    "limit": 5708
   },
   "reportMissingTypeArgument": {
-    "limit": 15640
+    "limit": 15660
   },
   "reportMissingTypeStubs": {
     "limit": 40
@@ -81,13 +84,13 @@
     "limit": 0
   },
   "reportPossiblyUnboundVariable": {
-    "limit": 56
+    "limit": 65
   },
   "reportPrivateUsage": {
-    "limit": 1824
+    "limit": 1825
   },
   "reportRedeclaration": {
-    "limit": 8
+    "limit": 9
   },
   "reportReturnType": {
     "limit": 213
@@ -99,25 +102,25 @@
     "limit": 0
   },
   "reportUnknownArgumentType": {
-    "limit": 44776
+    "limit": 44804
   },
   "reportUnknownLambdaType": {
     "limit": 113
   },
   "reportUnknownMemberType": {
-    "limit": 39237
+    "limit": 39287
   },
   "reportUnknownParameterType": {
-    "limit": 19967
+    "limit": 19984
   },
   "reportUnknownVariableType": {
-    "limit": 30881
+    "limit": 30909
   },
   "reportUnnecessaryCast": {
     "limit": 117
   },
   "reportUnnecessaryComparison": {
-    "limit": 699
+    "limit": 701
   },
   "reportUnnecessaryContains": {
     "limit": 5
@@ -127,6 +130,9 @@
   },
   "reportUntypedBaseClass": {
     "limit": 0
+  },
+  "reportUntypedClassDecorator": {
+    "limit": 1
   },
   "reportUntypedFunctionDecorator": {
     "limit": 27

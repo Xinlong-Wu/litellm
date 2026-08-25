@@ -22466,6 +22466,13 @@ export interface components {
              */
             max_parallel_requests?: number | null;
             /**
+             * Model Group Max Budget
+             * @description Max budget for each access group / model group (e.g. {'premium-models': {'max_budget': 50, 'budget_duration': '30d'}}). Spend across every model in the access group accrues to one cap.
+             */
+            model_group_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
+            /**
              * Model Max Budget
              * @description Max budget for each model (e.g. {'gpt-4o': {'max_budget': '0.0000001', 'budget_duration': '1d', 'tpm_limit': 1000, 'rpm_limit': 1000}})
              */
@@ -26179,6 +26186,10 @@ export interface components {
             max_budget?: number | null;
             /** Max Parallel Requests */
             max_parallel_requests?: number | null;
+            /** Model Group Max Budget */
+            model_group_max_budget?: {
+                [key: string]: unknown;
+            } | null;
             /** Model Max Budget */
             model_max_budget?: {
                 [key: string]: unknown;
@@ -26212,6 +26223,10 @@ export interface components {
             max_budget?: number | null;
             /** Max Parallel Requests */
             max_parallel_requests?: number | null;
+            /** Model Group Max Budget */
+            model_group_max_budget?: {
+                [key: string]: unknown;
+            } | null;
             /** Model Max Budget */
             model_max_budget?: {
                 [key: string]: unknown;
@@ -27639,6 +27654,13 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /**
+             * Model Group Max Budget
+             * @default {}
+             */
+            model_group_max_budget: {
+                [key: string]: unknown;
+            } | null;
+            /**
              * Model Max Budget
              * @default {}
              */
@@ -27729,6 +27751,13 @@ export interface components {
             max_parallel_requests?: number | null;
             /** Metadata */
             metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Model Group Max Budget
+             * @default {}
+             */
+            model_group_max_budget: {
                 [key: string]: unknown;
             } | null;
             /**
@@ -29122,6 +29151,13 @@ export interface components {
              */
             max_parallel_requests?: number | null;
             /**
+             * Model Group Max Budget
+             * @description Max budget for each access group / model group (e.g. {'premium-models': {'max_budget': 50, 'budget_duration': '30d'}}). Spend across every model in the access group accrues to one cap.
+             */
+            model_group_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
+            /**
              * Model Max Budget
              * @description Max budget for each model (e.g. {'gpt-4o': {'max_budget': '0.0000001', 'budget_duration': '1d', 'tpm_limit': 1000, 'rpm_limit': 1000}})
              */
@@ -29297,6 +29333,10 @@ export interface components {
             metadata?: {
                 [key: string]: unknown;
             } | null;
+            /** Model Group Max Budget */
+            model_group_max_budget?: {
+                [key: string]: unknown;
+            } | null;
             /** Model Max Budget */
             model_max_budget?: {
                 [key: string]: unknown;
@@ -29402,6 +29442,10 @@ export interface components {
             max_parallel_requests?: number | null;
             /** Metadata */
             metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Group Max Budget */
+            model_group_max_budget?: {
                 [key: string]: unknown;
             } | null;
             /** Model Max Budget */
@@ -29616,6 +29660,10 @@ export interface components {
             team_member_budget_duration?: string | null;
             /** Team Member Key Duration */
             team_member_key_duration?: string | null;
+            /** Team Member Model Group Max Budget */
+            team_member_model_group_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
             /** Team Member Permissions */
             team_member_permissions?: string[] | null;
             /** Team Member Rpm Limit */
@@ -29685,6 +29733,10 @@ export interface components {
              */
             metadata: {
                 [key: string]: unknown;
+            } | null;
+            /** Model Group Max Budget */
+            model_group_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
             } | null;
             /**
              * Model Max Budget
@@ -29854,6 +29906,10 @@ export interface components {
              * @default {}
              */
             metadata: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Group Max Budget */
+            model_group_max_budget?: {
                 [key: string]: unknown;
             } | null;
             /** Model Max Budget */
@@ -30367,6 +30423,10 @@ export interface components {
             team_member_budget_duration?: string | null;
             /** Team Member Key Duration */
             team_member_key_duration?: string | null;
+            /** Team Member Model Group Max Budget */
+            team_member_model_group_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
             /** Team Member Rpm Limit */
             team_member_rpm_limit?: number | null;
             /** Team Member Tpm Limit */
@@ -34534,6 +34594,10 @@ export interface components {
             metadata?: {
                 [key: string]: unknown;
             } | null;
+            /** Model Group Max Budget */
+            model_group_max_budget?: {
+                [key: string]: unknown;
+            } | null;
             /** Model Max Budget */
             model_max_budget?: {
                 [key: string]: unknown;
@@ -34752,6 +34816,10 @@ export interface components {
             team_member_budget_duration?: string | null;
             /** Team Member Key Duration */
             team_member_key_duration?: string | null;
+            /** Team Member Model Group Max Budget */
+            team_member_model_group_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
             /** Team Member Rpm Limit */
             team_member_rpm_limit?: number | null;
             /** Team Member Tpm Limit */
@@ -34824,6 +34892,10 @@ export interface components {
             /** Metadata */
             metadata?: {
                 [key: string]: unknown;
+            } | null;
+            /** Model Group Max Budget */
+            model_group_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
             } | null;
             /**
              * Model Max Budget
@@ -34930,6 +35002,10 @@ export interface components {
             /** Metadata */
             metadata?: {
                 [key: string]: unknown;
+            } | null;
+            /** Model Group Max Budget */
+            model_group_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
             } | null;
             /**
              * Model Max Budget
@@ -35325,6 +35401,10 @@ export interface components {
             /** Team Max Budget */
             team_max_budget?: number | null;
             team_member?: components["schemas"]["Member"] | null;
+            /** Team Member Model Group Max Budget */
+            team_member_model_group_max_budget?: {
+                [key: string]: unknown;
+            } | null;
             /** Team Member Rpm Limit */
             team_member_rpm_limit?: number | null;
             /** Team Member Spend */
@@ -35375,6 +35455,10 @@ export interface components {
             user_id?: string | null;
             /** User Max Budget */
             user_max_budget?: number | null;
+            /** User Model Group Max Budget */
+            user_model_group_max_budget?: {
+                [key: string]: unknown;
+            } | null;
             user_role?: components["schemas"]["LitellmUserRoles"] | null;
             /** User Rpm Limit */
             user_rpm_limit?: number | null;

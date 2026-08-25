@@ -462,6 +462,7 @@ class TeamMemberBudgetHandler:
         team_member_rpm_limit: int | None = None,
         team_member_tpm_limit: int | None = None,
         team_member_budget_duration: str | None = None,
+        team_member_model_group_max_budget: dict | None = None,
     ) -> bool:
         """Check if any team member limits are provided"""
         return any(
@@ -470,6 +471,7 @@ class TeamMemberBudgetHandler:
                 team_member_rpm_limit is not None,
                 team_member_tpm_limit is not None,
                 team_member_budget_duration is not None,
+                team_member_model_group_max_budget is not None,
             ]
         )
 
@@ -482,6 +484,7 @@ class TeamMemberBudgetHandler:
         team_member_rpm_limit: int | None = None,
         team_member_tpm_limit: int | None = None,
         team_member_budget_duration: str | None = None,
+        team_member_model_group_max_budget: dict | None = None,
     ) -> dict:
         """Create team member budget table with provided limits"""
         from litellm.proxy._types import BudgetNewRequest
@@ -508,6 +511,8 @@ class TeamMemberBudgetHandler:
             budget_request.tpm_limit = team_member_tpm_limit
         if team_member_budget_duration is not None:
             budget_request.budget_duration = team_member_budget_duration
+        if team_member_model_group_max_budget is not None:
+            budget_request.model_group_max_budget = team_member_model_group_max_budget
 
         team_member_budget_table: Final = await _as_budget_write(new_budget)(
             budget_obj=budget_request,
@@ -533,6 +538,7 @@ class TeamMemberBudgetHandler:
         team_member_rpm_limit: int | None = None,
         team_member_tpm_limit: int | None = None,
         team_member_budget_duration: str | None = None,
+        team_member_model_group_max_budget: dict | None = None,
     ) -> dict:
         """Upsert team member budget table with provided limits"""
         from litellm.proxy._types import BudgetNewRequest
@@ -556,6 +562,8 @@ class TeamMemberBudgetHandler:
                 budget_request.tpm_limit = team_member_tpm_limit
             if team_member_budget_duration is not None:
                 budget_request.budget_duration = team_member_budget_duration
+            if team_member_model_group_max_budget is not None:
+                budget_request.model_group_max_budget = team_member_model_group_max_budget
 
             budget_row: Final = await _as_budget_write(update_budget)(
                 budget_obj=budget_request,
@@ -581,6 +589,7 @@ class TeamMemberBudgetHandler:
                 team_member_rpm_limit=team_member_rpm_limit,
                 team_member_tpm_limit=team_member_tpm_limit,
                 team_member_budget_duration=team_member_budget_duration,
+                team_member_model_group_max_budget=team_member_model_group_max_budget,
             )
 
         # Remove team member fields from updated_kv
@@ -594,6 +603,7 @@ class TeamMemberBudgetHandler:
         data_dict.pop("team_member_budget_duration", None)
         data_dict.pop("team_member_rpm_limit", None)
         data_dict.pop("team_member_tpm_limit", None)
+        data_dict.pop("team_member_model_group_max_budget", None)
 
     @staticmethod
     async def clear_team_member_budget_fields(
@@ -1451,6 +1461,7 @@ async def new_team(
             team_member_rpm_limit=data.team_member_rpm_limit,
             team_member_tpm_limit=data.team_member_tpm_limit,
             team_member_budget_duration=data.team_member_budget_duration,
+            team_member_model_group_max_budget=data.team_member_model_group_max_budget,
         ):
             data_json = await TeamMemberBudgetHandler.create_team_member_budget_table(
                 data=data,
@@ -1460,6 +1471,7 @@ async def new_team(
                 team_member_rpm_limit=data.team_member_rpm_limit,
                 team_member_tpm_limit=data.team_member_tpm_limit,
                 team_member_budget_duration=data.team_member_budget_duration,
+                team_member_model_group_max_budget=data.team_member_model_group_max_budget,
             )
 
         ## ADD TO TEAM TABLE
@@ -2139,6 +2151,7 @@ async def update_team(
                 "team_member_rpm_limit",
                 "team_member_tpm_limit",
                 "team_member_budget_duration",
+                "team_member_model_group_max_budget",
             ]
             if field in updated_kv
         }
@@ -2148,6 +2161,7 @@ async def update_team(
             team_member_rpm_limit=data.team_member_rpm_limit,
             team_member_tpm_limit=data.team_member_tpm_limit,
             team_member_budget_duration=data.team_member_budget_duration,
+            team_member_model_group_max_budget=data.team_member_model_group_max_budget,
         ):
             updated_kv = await TeamMemberBudgetHandler.upsert_team_member_budget_table(
                 team_table=existing_team_row,
@@ -2157,6 +2171,7 @@ async def update_team(
                 team_member_rpm_limit=data.team_member_rpm_limit,
                 team_member_tpm_limit=data.team_member_tpm_limit,
                 team_member_budget_duration=data.team_member_budget_duration,
+                team_member_model_group_max_budget=data.team_member_model_group_max_budget,
             )
             # Backfill team_memberships for members who joined before the
             # budget was configured — they won't have a membership row yet.
