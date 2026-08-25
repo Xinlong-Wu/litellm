@@ -776,7 +776,7 @@ class AnthropicPassthroughLoggingHandler:
 
         from litellm._uuid import uuid
         from litellm.llms.anthropic.batches.transformation import AnthropicBatchesConfig
-        from litellm.types.utils import Choices, SpecialEnums
+        from litellm.types.utils import SpecialEnums
 
         try:
             _json_response: Final = httpx_response.json()

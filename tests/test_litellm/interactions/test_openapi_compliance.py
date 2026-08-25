@@ -16,6 +16,8 @@ import httpx
 import pytest
 from openapi_core import OpenAPI
 
+from litellm.types.interactions import Interaction, InteractionStatus
+
 OPENAPI_SPEC_URL = "https://ai.google.dev/static/api/interactions.openapi.json"
 
 
@@ -32,8 +34,7 @@ def _load_openapi_spec_dict() -> Dict[str, Any]:
         return response.json()
     except Exception as e:  # pragma: no cover - defensive, env-dependent
         pytest.skip(
-            f"Skipping Google Interactions OpenAPI compliance tests - "
-            f"unable to load spec from {OPENAPI_SPEC_URL}: {e}"
+            f"Skipping Google Interactions OpenAPI compliance tests - unable to load spec from {OPENAPI_SPEC_URL}: {e}"
         )
 
 
@@ -125,22 +126,18 @@ class TestRequestCompliance:
 
         discriminator = content_schema.get("discriminator")
         if discriminator is not None:
-            assert (
-                discriminator.get("propertyName") == "type"
-            ), f"Content is discriminated on {discriminator.get('propertyName')!r}, not 'type'"
+            assert discriminator.get("propertyName") == "type", (
+                f"Content is discriminated on {discriminator.get('propertyName')!r}, not 'type'"
+            )
 
         variant_names = [
-            option["$ref"].split("/")[-1]
-            for option in content_schema.get("oneOf", [])
-            if "$ref" in option
+            option["$ref"].split("/")[-1] for option in content_schema.get("oneOf", []) if "$ref" in option
         ]
         assert variant_names, f"Content is not a union of named variants: {content_schema}"
 
         mapping = (discriminator or {}).get("mapping") or {}
         type_values = {
-            variant: mapping_value
-            for mapping_value, ref in mapping.items()
-            for variant in [ref.split("/")[-1]]
+            variant: mapping_value for mapping_value, ref in mapping.items() for variant in [ref.split("/")[-1]]
         } or {
             variant: _declared_type_value(spec_dict["components"]["schemas"].get(variant, {}))
             for variant in variant_names
@@ -167,17 +164,41 @@ class TestRequestCompliance:
         assert text_schema["properties"]["type"].get("const") == "text"
         print("✓ TextContent schema is correct")
 
-    def test_turn_schema(self, spec_dict):
-        """Verify Turn schema for multi-turn conversations."""
-        turn_schema = spec_dict["components"]["schemas"]["Turn"]
+    def test_conversation_input_schema(self, spec_dict):
+        """Verify the schema used for multi-turn conversation input."""
+        schemas = spec_dict["components"]["schemas"]
+        turn_schema = schemas.get("Turn")
+        if turn_schema is not None:
+            assert "role" in turn_schema["properties"]
+            assert "content" in turn_schema["properties"]
+            assert "oneOf" in turn_schema["properties"]["content"]
+            return
 
-        assert "role" in turn_schema["properties"]
-        assert "content" in turn_schema["properties"]
+        interactions_input = schemas["InteractionsInput"]
+        step_list = next(
+            (
+                option
+                for option in interactions_input["oneOf"]
+                if option.get("type") == "array" and option.get("items", {}).get("$ref", "").endswith("/Step")
+            ),
+            None,
+        )
+        assert step_list is not None, f"InteractionsInput has no Step array: {interactions_input}"
 
-        # Content can be string or Content[]
-        content_prop = turn_schema["properties"]["content"]
-        assert "oneOf" in content_prop
-        print("✓ Turn schema supports role + content")
+        step_variants = {
+            option["$ref"].split("/")[-1] for option in schemas["Step"].get("oneOf", []) if "$ref" in option
+        }
+        expected_step_types = {
+            "UserInputStep": "user_input",
+            "ModelOutputStep": "model_output",
+        }
+        assert expected_step_types.keys() <= step_variants
+        for variant_name, type_value in expected_step_types.items():
+            variant_schema = schemas[variant_name]
+            assert _declared_type_value(variant_schema) == type_value
+            content_prop = variant_schema["properties"]["content"]
+            assert content_prop.get("type") == "array"
+            assert content_prop["items"]["$ref"].endswith("/Content")
 
 
 class TestResponseCompliance:
@@ -189,13 +210,13 @@ class TestResponseCompliance:
         # output-only fields (notably the `steps` array, formerly `outputs`)
         # off `CreateModelInteractionParams` and onto `Interaction`; the request
         # schema no longer carries `steps`. Google later moved `role` off
-        # `Interaction` onto the per-turn `Turn` schema (asserted in
-        # test_turn_schema), so it is no longer a top-level output field here.
+        # `Interaction` into the structured conversation input schemas, so it is
+        # no longer a top-level output field here.
         # Keep this aligned with the live spec.
         schema = spec_dict["components"]["schemas"]["Interaction"]
 
         # Output fields (readOnly). `role` was removed from the `Interaction`
-        # schema by Google; it now lives only on `Turn`.
+        # schema by Google.
         output_fields = [
             "id",
             "status",
@@ -229,6 +250,9 @@ class TestResponseCompliance:
             "queued",
         ]
         assert status_prop["enum"] == expected_statuses
+        assert [status.value for status in InteractionStatus] == expected_statuses
+        interaction = Interaction.model_validate({"id": "interaction-test", "status": "queued"})
+        assert interaction.status.value == "queued"
         print(f"✓ Status enum values: {expected_statuses}")
 
     def test_usage_schema(self, spec_dict):
@@ -239,9 +263,7 @@ class TestResponseCompliance:
         expected_fields = ["total_input_tokens", "total_output_tokens", "total_tokens"]
 
         for field in expected_fields:
-            assert (
-                field in usage_schema["properties"]
-            ), f"Usage field '{field}' not in spec"
+            assert field in usage_schema["properties"], f"Usage field '{field}' not in spec"
             print(f"✓ Usage field '{field}' exists")
 
 
@@ -260,9 +282,7 @@ class TestToolsCompliance:
         """Verify FunctionDeclaration schema for function tools."""
         if "FunctionDeclaration" in spec_dict["components"]["schemas"]:
             func_schema = spec_dict["components"]["schemas"]["FunctionDeclaration"]
-            assert "name" in func_schema.get(
-                "properties", {}
-            ) or "name" in func_schema.get("required", [])
+            assert "name" in func_schema.get("properties", {}) or "name" in func_schema.get("required", [])
             print("✓ FunctionDeclaration schema found")
         else:
             print("⚠ FunctionDeclaration schema not found (may be nested)")
@@ -328,6 +348,4 @@ if __name__ == "__main__":
             if method in ["get", "post", "delete", "put", "patch"]:
                 print(f"  {method.upper()} {path}")
 
-    print(
-        f"\nSchemas: {list(spec.get('components', {}).get('schemas', {}).keys())[:10]}..."
-    )
+    print(f"\nSchemas: {list(spec.get('components', {}).get('schemas', {}).keys())[:10]}...")

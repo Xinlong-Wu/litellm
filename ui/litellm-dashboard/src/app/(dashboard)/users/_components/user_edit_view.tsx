@@ -4,6 +4,7 @@ import { Checkbox, Form, Input, Select, Tooltip } from "antd";
 import React, { useState } from "react";
 import { all_admin_roles } from "@/utils/roles";
 import BudgetDurationDropdown from "@/components/common_components/budget_duration_dropdown";
+import ModelGroupBudgetEditor from "@/components/common_components/ModelGroupBudgetEditor";
 import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
 import NumericalInput from "@/components/shared/numerical_input";
 import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelector";
@@ -64,6 +65,7 @@ export function UserEditView({
       models: userData.user_info?.models || [],
       max_budget: isUnlimited ? "" : maxBudget,
       budget_duration: userData.user_info?.budget_duration,
+      model_group_max_budget: userData.user_info?.model_group_max_budget || {},
       metadata: userData.user_info?.metadata ? JSON.stringify(userData.user_info.metadata, null, 2) : undefined,
       ...(canEditMcpPermissions ? buildMcpFieldValues(objectPermission) : {}),
     });
@@ -196,6 +198,20 @@ export function UserEditView({
 
       <Form.Item label="Reset Budget" name="budget_duration">
         <BudgetDurationDropdown />
+      </Form.Item>
+
+      <Form.Item
+        label={
+          <span>
+            Model Group Budgets{" "}
+            <Tooltip title="Cap dollar spend per access group. Spend on any model in the access group counts toward one budget, aggregated across all of this user's keys.">
+              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+            </Tooltip>
+          </span>
+        }
+        name="model_group_max_budget"
+      >
+        <ModelGroupBudgetEditor />
       </Form.Item>
 
       <Form.Item label="Metadata" name="metadata">

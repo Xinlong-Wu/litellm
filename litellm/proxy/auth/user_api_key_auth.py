@@ -259,6 +259,13 @@ async def _check_key_model_budget_with_fallback(
             path_params["model"] = fallback_model
 
 
+def _normalize_expiry_time(expires: str | datetime) -> datetime:
+    expiry_time = expires if isinstance(expires, datetime) else datetime.fromisoformat(expires)
+    if expiry_time.tzinfo is None or expiry_time.tzinfo.utcoffset(expiry_time) is None:
+        return expiry_time.astimezone()
+    return expiry_time
+
+
 def _get_bearer_token_or_received_api_key(api_key: str) -> str:
     if api_key.startswith("Bearer "):  # ensure Bearer token passed in
         api_key = api_key.replace("Bearer ", "")  # extract the token
@@ -1578,12 +1585,7 @@ async def _user_api_key_auth_builder(
         ):
             if valid_token.expires is not None:
                 current_time = datetime.now(timezone.utc)
-                if isinstance(valid_token.expires, datetime):
-                    expiry_time = valid_token.expires
-                else:
-                    expiry_time = datetime.fromisoformat(valid_token.expires)
-                if expiry_time.tzinfo is None or expiry_time.tzinfo.utcoffset(expiry_time) is None:
-                    expiry_time = expiry_time.replace(tzinfo=timezone.utc)
+                expiry_time = _normalize_expiry_time(valid_token.expires)
                 if expiry_time < current_time:
                     await _delete_cache_key_object(
                         hashed_token=hash_token(api_key),
@@ -1865,12 +1867,7 @@ async def _user_api_key_auth_builder(
             # Check 3. If token is expired
             if valid_token.expires is not None:
                 current_time = datetime.now(timezone.utc)
-                if isinstance(valid_token.expires, datetime):
-                    expiry_time = valid_token.expires
-                else:
-                    expiry_time = datetime.fromisoformat(valid_token.expires)
-                if expiry_time.tzinfo is None or expiry_time.tzinfo.utcoffset(expiry_time) is None:
-                    expiry_time = expiry_time.replace(tzinfo=timezone.utc)
+                expiry_time = _normalize_expiry_time(valid_token.expires)
                 verbose_proxy_logger.debug(
                     "Checking if token expired, expiry time %s and current time %s", expiry_time, current_time
                 )
@@ -2726,6 +2723,7 @@ async def _return_user_api_key_auth_obj(
             user_email=user_obj.user_email,
             user_spend=getattr(user_obj, "spend", None),
             user_max_budget=getattr(user_obj, "max_budget", None),
+            user_model_group_max_budget=getattr(user_obj, "model_group_max_budget", None),
         )
     if user_obj is not None and _is_user_proxy_admin(user_obj=user_obj):
         user_api_key_kwargs.update(
@@ -2956,12 +2954,7 @@ async def _run_post_custom_auth_checks(
     # 2. Check token expiry
     if valid_token.expires is not None:
         current_time: Final = datetime.now(timezone.utc)
-        if isinstance(valid_token.expires, datetime):
-            expiry_time = valid_token.expires
-        else:
-            expiry_time = datetime.fromisoformat(valid_token.expires)
-        if expiry_time.tzinfo is None or expiry_time.tzinfo.utcoffset(expiry_time) is None:
-            expiry_time = expiry_time.replace(tzinfo=timezone.utc)
+        expiry_time: Final = _normalize_expiry_time(valid_token.expires)
         if expiry_time < current_time:
             raise ProxyException(
                 message=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",

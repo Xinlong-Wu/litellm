@@ -150,6 +150,14 @@ class UserAPIKeyAuthExceptionHandler:
                     param=None,
                     code=getattr(e, "status_code", status.HTTP_429_TOO_MANY_REQUESTS),
                 )
+            if isinstance(e, litellm.RateLimitError):
+                raise ProxyException(
+                    message=getattr(e, "message", str(e)),
+                    type=ProxyErrorTypes.rate_limit_error,
+                    param=None,
+                    code=getattr(e, "status_code", status.HTTP_429_TOO_MANY_REQUESTS),
+                    headers=getattr(e, "headers", None) or {},
+                )
             if isinstance(e, HTTPException):
                 raise ProxyException(
                     message=getattr(e, "detail", f"Authentication Error({e})"),

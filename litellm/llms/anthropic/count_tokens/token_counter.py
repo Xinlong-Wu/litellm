@@ -63,11 +63,17 @@ class AnthropicTokenCounter(BaseTokenCounter):
             verbose_logger.warning("No Anthropic API key found for token counting")
             return None
 
+        # Route the CountTokens request to the deployment's own api_base (e.g. an
+        # OpenAI-compatible upstream proxy) instead of always hitting the public
+        # Anthropic endpoint. Falls back to env var / public endpoint in the handler.
+        api_base = litellm_params.get("api_base") or os.getenv("ANTHROPIC_API_BASE")
+
         try:
             result: Final = await anthropic_count_tokens_handler.handle_count_tokens_request(
                 model=model_to_use,
                 messages=messages,
                 api_key=api_key,
+                api_base=api_base,
                 tools=tools,
                 system=system,
             )
