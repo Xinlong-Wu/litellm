@@ -6,11 +6,11 @@ import time
 from datetime import datetime
 from logging import Formatter
 from logging.handlers import TimedRotatingFileHandler
-from typing import Any, Dict, Optional
+from typing import Any
 
-from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.litellm_core_utils.secret_redaction import redact_string
 
 # OS-dispatched import for the advisory file lock used to serialize daily log
 # rotation across processes. Each platform imports only the stdlib module it is
@@ -121,7 +121,7 @@ handler.setLevel(numeric_level)
 handler.addFilter(_secret_filter)
 
 
-def _try_parse_json_message(message: str) -> Optional[Dict[str, Any]]:
+def _try_parse_json_message(message: str) -> dict[str, Any] | None:
     """
     Try to parse a log message as JSON. Returns parsed dict if valid, else None.
     Handles messages that are entirely valid JSON (e.g. json.dumps output).
@@ -138,7 +138,7 @@ def _try_parse_json_message(message: str) -> Optional[Dict[str, Any]]:
     return parsed
 
 
-def _try_parse_embedded_python_dict(message: str) -> Optional[Dict[str, Any]]:
+def _try_parse_embedded_python_dict(message: str) -> dict[str, Any] | None:
     """
     Try to find and parse a Python dict repr (e.g. str(d) or repr(d)) embedded in
     the message. Handles patterns like:
@@ -184,7 +184,7 @@ _STANDARD_RECORD_ATTRS = _get_standard_record_attrs()
 
 class JsonFormatter(Formatter):
     def __init__(self):
-        super(JsonFormatter, self).__init__()
+        super().__init__()
 
     def formatTime(self, record, datefmt=None):
         # Use datetime to format the timestamp in ISO 8601 format
@@ -193,7 +193,7 @@ class JsonFormatter(Formatter):
 
     def format(self, record):
         message_str = record.getMessage()
-        json_record: Dict[str, Any] = {
+        json_record: dict[str, Any] = {
             "message": message_str,
             "level": record.levelname,
             "timestamp": self.formatTime(record),
@@ -355,7 +355,7 @@ def _get_log_retention_days() -> int:
         return 14
 
 
-def _resolve_app_log_file() -> Optional[str]:
+def _resolve_app_log_file() -> str | None:
     """Resolve the application log file path from env, or None if unconfigured.
 
     LITELLM_LOG_FILE (explicit path) wins; otherwise LITELLM_LOG_DIR/litellm.log.
@@ -369,7 +369,7 @@ def _resolve_app_log_file() -> Optional[str]:
     return None
 
 
-def resolve_uvicorn_log_file() -> Optional[str]:
+def resolve_uvicorn_log_file() -> str | None:
     """Resolve the uvicorn log file path (separate from the application log)."""
     log_dir = os.getenv("LITELLM_LOG_DIR")
     if log_dir:
@@ -427,8 +427,8 @@ class _SharedRotatingFileHandler(TimedRotatingFileHandler):
         self.addFilter(_secret_filter)
         self.setLevel(numeric_level)
         self.setFormatter(JsonFormatter() if use_json else _get_file_text_formatter())
-        self._dev: Optional[int] = None
-        self._ino: Optional[int] = None
+        self._dev: int | None = None
+        self._ino: int | None = None
         self._update_dev_ino()
 
     def _stat_base(self):
@@ -503,14 +503,14 @@ def _build_file_handler(path: str, use_json: bool) -> _SharedRotatingFileHandler
     )
 
 
-def _get_app_file_handler() -> Optional[_SharedRotatingFileHandler]:
+def _get_app_file_handler() -> _SharedRotatingFileHandler | None:
     return next(
         (handler for handler in verbose_proxy_logger.handlers if isinstance(handler, _SharedRotatingFileHandler)),
         None,
     )
 
 
-def add_file_logging(path: Optional[str] = None, use_json: Optional[bool] = None) -> Optional[str]:
+def add_file_logging(path: str | None = None, use_json: bool | None = None) -> str | None:
     """Attach a daily-rotating file handler to the litellm loggers.
 
     Resolves ``path`` from the argument, then from LITELLM_LOG_FILE / LITELLM_LOG_DIR.
@@ -579,7 +579,7 @@ def _get_uvicorn_log_config(use_json: bool):
     default_fmt = "%(asctime)s %(levelprefix)s %(message)s"
     access_fmt = '%(asctime)s %(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s'
 
-    formatters: Dict[str, Any] = {
+    formatters: dict[str, Any] = {
         "json": {"()": json_formatter_class},
         "default": {
             "()": "uvicorn.logging.DefaultFormatter",
@@ -595,7 +595,7 @@ def _get_uvicorn_log_config(use_json: bool):
 
     stdout_default_formatter = "json" if use_json else "default"
     stdout_access_formatter = "json" if use_json else "access"
-    handlers: Dict[str, Any] = {
+    handlers: dict[str, Any] = {
         "default": {
             "formatter": stdout_default_formatter,
             "class": "logging.StreamHandler",

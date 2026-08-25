@@ -7,7 +7,7 @@ Use this to route requests between Teams
 """
 
 import re
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal
 
 from litellm._logging import verbose_logger
 from litellm.types.router import RouterErrors
@@ -23,7 +23,7 @@ else:
 def _is_valid_deployment_tag_regex(
     tag_regexes: list[str],
     header_strings: list[str],
-) -> Optional[str]:
+) -> str | None:
     """
     Test compiled regex patterns against "Header-Name: value" strings.
 
@@ -71,10 +71,10 @@ def is_valid_deployment_tag(deployment_tags: list[str], request_tags: list[str],
 
 def _match_deployment(
     deployment: Any,
-    request_tags: Optional[list[str]],
+    request_tags: list[str] | None,
     header_strings: list[str],
     match_any: bool,
-) -> Optional[dict[str, str]]:
+) -> dict[str, str] | None:
     """
     Determine whether *deployment* matches the current request.
 
@@ -87,8 +87,8 @@ def _match_deployment(
          ran and failed, so the regex cannot override strict-tag policy.
     """
     litellm_params = deployment.get("litellm_params", {})
-    deployment_tags: Optional[list[str]] = litellm_params.get("tags")
-    deployment_tag_regex: Optional[list[str]] = litellm_params.get("tag_regex")
+    deployment_tags: list[str] | None = litellm_params.get("tags")
+    deployment_tag_regex: list[str] | None = litellm_params.get("tag_regex")
 
     # 1. Exact tag match (existing behaviour).
     if deployment_tags and request_tags:
@@ -153,7 +153,7 @@ async def get_deployments_for_tag(
     llm_router_instance: LitellmRouter,
     model: str,  # used to raise the correct error
     healthy_deployments: list[Any] | dict[Any, Any],
-    request_kwargs: Optional[dict[Any, Any]] = None,
+    request_kwargs: dict[Any, Any] | None = None,
     metadata_variable_name: Literal["metadata", "litellm_metadata"] = "metadata",
 ):
     """
@@ -270,7 +270,7 @@ async def get_deployments_for_tag(
 
 
 def _get_tags_from_request_kwargs(
-    request_kwargs: Optional[dict[Any, Any]] = None,
+    request_kwargs: dict[Any, Any] | None = None,
     metadata_variable_name: Literal["metadata", "litellm_metadata"] = "metadata",
 ) -> list[str]:
     """

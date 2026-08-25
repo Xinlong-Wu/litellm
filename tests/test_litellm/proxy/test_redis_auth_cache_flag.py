@@ -161,16 +161,11 @@ class TestRedisAuthCacheFlag:
         session" bug)
         """
         for flag_value in (True, False, None):
-            ls = (
-                {"enable_redis_auth_cache": flag_value}
-                if flag_value is not None
-                else {}
-            )
+            ls = {"enable_redis_auth_cache": flag_value} if flag_value is not None else {}
             with _patched_init_cache(
                 litellm_settings=ls,
                 cache_params={"type": "redis", "host": "localhost", "port": 6379},
             ) as (_, _, cli_sso_cache):
                 assert cli_sso_cache.redis_cache is not None, (
-                    f"cli_sso_session_cache must always get Redis "
-                    f"(enable_redis_auth_cache={flag_value!r})"
+                    f"cli_sso_session_cache must always get Redis (enable_redis_auth_cache={flag_value!r})"
                 )

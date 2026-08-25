@@ -1,8 +1,13 @@
 """Tests for the OTel v2 sources of truth: span registry, semconv keys, config,
 and the typed StandardLoggingPayload adapter. These need no OTel SDK."""
 
+import logging
+import re
+from pathlib import Path
+
 import pytest
 
+import litellm
 from litellm.integrations.otel import (
     BAGGAGE_PROMOTED_KEYS,
     DB,
@@ -137,9 +142,7 @@ def test_llm_call_span_name():
 
 def _all_constants(cls):
     return {
-        getattr(cls, name)
-        for name in vars(cls)
-        if not name.startswith("__") and isinstance(getattr(cls, name), str)
+        getattr(cls, name) for name in vars(cls) if not name.startswith("__") and isinstance(getattr(cls, name), str)
     }
 
 
@@ -210,6 +213,103 @@ def test_operation_resolution():
     assert resolve_operation("call_mcp_tool") is GenAIOperation.EXECUTE_TOOL
 
 
+@pytest.mark.parametrize("call_type", ["vector_store_search", "avector_store_search"])
+def test_vector_store_search_is_a_retrieval_operation(call_type):
+    """A vector-store search is a retrieval, so its duration and cost must not
+    land in the chat series that dashboards read latency off."""
+    assert resolve_operation(call_type) is GenAIOperation.RETRIEVAL
+    assert resolve_operation(call_type).value == "retrieval"
+
+
+@pytest.mark.parametrize("call_type", ["query", "aquery"])
+def test_rag_query_is_a_retrieval_operation(call_type):
+    """``/rag/query`` reaches the same recorder as a vector-store search and is the
+    same operation, so it must not be the one retrieval surface left reading as chat."""
+    assert resolve_operation(call_type) is GenAIOperation.RETRIEVAL
+
+
+@pytest.mark.parametrize(
+    "call_type",
+    [
+        f"{prefix}vector_store_{verb}"
+        for verb in ("create", "retrieve", "list", "update", "delete")
+        for prefix in ("", "a")
+    ],
+)
+def test_vector_store_management_is_not_chat(call_type):
+    """The store lifecycle calls are not GenAI client operations and the convention
+    names nothing for them, so they take a vendor value rather than defaulting into
+    the chat series."""
+    assert resolve_operation(call_type) is GenAIOperation.LITELLM_VECTOR_STORE_MANAGEMENT
+    assert resolve_operation(call_type).value == "litellm.vector_store_management"
+
+
+@pytest.mark.parametrize(
+    "call_type",
+    [
+        f"{prefix}vector_store_file_{verb}"
+        for verb in ("create", "list", "retrieve", "content", "update", "delete")
+        for prefix in ("", "a")
+    ],
+)
+def test_vector_store_file_management_is_not_chat(call_type):
+    """The file operations are a distinct REST resource from the store lifecycle, so
+    they get their own vendor value instead of sharing one bucket."""
+    assert resolve_operation(call_type) is GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT
+    assert resolve_operation(call_type).value == "litellm.vector_store_file_management"
+
+
+def test_vendor_operation_values_are_namespaced():
+    """A vendor value must stay under the ``litellm.`` prefix: an unprefixed invented
+    name could collide with a value the convention adds later, silently changing what
+    a conformant consumer thinks it is reading."""
+    vendor = [op for op in GenAIOperation if op.name.startswith("LITELLM_")]
+    assert vendor, "no vendor operation values defined"
+    assert all(op.value.startswith("litellm.") for op in vendor)
+
+
+@pytest.mark.parametrize("call_type", ["send_message", "asend_message", "asend_message_streaming"])
+def test_agent_message_is_an_invoke_agent_operation(call_type):
+    """An agent (A2A) message send is an agent invocation, not a chat completion.
+
+    The streaming spelling counts: ``_build_streaming_logging_obj`` in
+    ``litellm/a2a_protocol/main.py`` stamps ``asend_message_streaming`` on the
+    logging object the streaming iterator dispatches success handlers with, so a
+    missing entry sends every streamed agent turn into the chat series. There is
+    no sync spelling because A2A streaming is async-only.
+    """
+    assert resolve_operation(call_type) is GenAIOperation.INVOKE_AGENT
+    assert resolve_operation(call_type).value == "invoke_agent"
+
+
+def test_every_call_type_the_a2a_package_stamps_is_an_agent_operation():
+    """Pins the map to the call types the A2A code actually stamps on its logging
+    objects. A new spelling added there without a map entry fails here instead of
+    quietly landing in the chat series, which is how the streaming one was missed."""
+    a2a_package = Path(litellm.__file__).parent / "a2a_protocol"
+    stamped = {
+        call_type
+        for source in a2a_package.rglob("*.py")
+        for call_type in re.findall(r'call_type="([^"]+)"', source.read_text())
+    }
+    assert stamped, "no call_type literals found in litellm/a2a_protocol"
+    unmapped = {
+        call_type: resolve_operation(call_type).value
+        for call_type in stamped
+        if resolve_operation(call_type) is not GenAIOperation.INVOKE_AGENT
+    }
+    assert not unmapped, f"add these to _OPERATION_BY_CALL_TYPE: {unmapped}"
+
+
+def test_unmapped_call_type_falls_back_to_chat_loudly(caplog):
+    """The fallback still labels the series ``chat`` so it is never unlabelled,
+    but it says so at debug: a silent default is how retrieval and agent calls
+    ended up in the chat charts in the first place."""
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        assert resolve_operation("some_future_call_type") is GenAIOperation.CHAT
+    assert any("some_future_call_type" in record.getMessage() for record in caplog.records)
+
+
 # --- MCP tool-call (source of truth #1/#2/#3) ------------------------------- #
 
 
@@ -266,9 +366,7 @@ def test_mcp_tool_call_content_gated_off_by_default():
     off = MCPToolCallSpanData.from_standard_logging_payload(_mcp_payload())
     assert off.arguments_json is None and off.result_json is None
 
-    on = MCPToolCallSpanData.from_standard_logging_payload(
-        _mcp_payload(), capture_content=True
-    )
+    on = MCPToolCallSpanData.from_standard_logging_payload(_mcp_payload(), capture_content=True)
     assert on.arguments_json is not None and '"Paris"' in on.arguments_json
     assert on.result_json is not None and "21" in on.result_json
 
@@ -400,9 +498,7 @@ def test_content_capture_gated_off_by_default():
     payload = _sample_payload(
         messages=[{"role": "user", "content": "secret prompt"}],
     )
-    payload["response"]["choices"] = [
-        {"finish_reason": "stop", "message": {"role": "assistant", "content": "secret"}}
-    ]
+    payload["response"]["choices"] = [{"finish_reason": "stop", "message": {"role": "assistant", "content": "secret"}}]
     data = LLMCallSpanData.from_standard_logging_payload(payload)
     assert data.messages_in == ()
     assert data.choices_out == ()
@@ -429,9 +525,7 @@ def test_request_identity_prefers_canonical_team_keys():
 def test_request_identity_falls_back_to_legacy_team_keys():
     from litellm.integrations.otel.model.payloads import RequestIdentity
 
-    payload = _sample_payload(
-        metadata={"team_id": "legacy-team", "team_alias": "legacy"}
-    )
+    payload = _sample_payload(metadata={"team_id": "legacy-team", "team_alias": "legacy"})
     ident = RequestIdentity.from_payload(payload)
     assert ident.team_id == "legacy-team"
     assert ident.team_alias == "legacy"
@@ -555,9 +649,7 @@ def test_content_capture_opt_in_retains_bodies():
     payload = _sample_payload(
         messages=[{"role": "user", "content": "secret prompt"}],
     )
-    payload["response"]["choices"] = [
-        {"finish_reason": "stop", "message": {"role": "assistant", "content": "hi"}}
-    ]
+    payload["response"]["choices"] = [{"finish_reason": "stop", "message": {"role": "assistant", "content": "hi"}}]
     data = LLMCallSpanData.from_standard_logging_payload(payload, capture_content=True)
     assert data.messages_in and data.messages_in[0]["content"] == "secret prompt"
     assert data.choices_out and data.choices_out[0]["message"]["content"] == "hi"
@@ -574,41 +666,17 @@ def test_capture_span_content_resolves_modes():
 
     # default (no_content) → off
     assert OpenTelemetryV2Config().capture_span_content is False
+    assert OpenTelemetryV2Config(capture_message_content=CaptureMessageContent.SPAN_ONLY).capture_span_content is True
     assert (
-        OpenTelemetryV2Config(
-            capture_message_content=CaptureMessageContent.SPAN_ONLY
-        ).capture_span_content
-        is True
-    )
-    assert (
-        OpenTelemetryV2Config(
-            capture_message_content=CaptureMessageContent.SPAN_AND_EVENT
-        ).capture_span_content
-        is True
+        OpenTelemetryV2Config(capture_message_content=CaptureMessageContent.SPAN_AND_EVENT).capture_span_content is True
     )
     # event-only does not authorize span-attribute content
-    assert (
-        OpenTelemetryV2Config(
-            capture_message_content=CaptureMessageContent.EVENT_ONLY
-        ).capture_span_content
-        is False
-    )
+    assert OpenTelemetryV2Config(capture_message_content=CaptureMessageContent.EVENT_ONLY).capture_span_content is False
     # V1 accepted UPPER_SNAKE_CASE; the env value is case-insensitive so an
     # operator carrying ``SPAN_AND_EVENT`` forward still enables capture.
-    assert (
-        OpenTelemetryV2Config(
-            capture_message_content="SPAN_AND_EVENT"
-        ).capture_span_content
-        is True
-    )
-    assert (
-        OpenTelemetryV2Config(capture_message_content="SPAN_ONLY").capture_span_content
-        is True
-    )
-    assert (
-        OpenTelemetryV2Config(capture_message_content="NO_CONTENT").capture_span_content
-        is False
-    )
+    assert OpenTelemetryV2Config(capture_message_content="SPAN_AND_EVENT").capture_span_content is True
+    assert OpenTelemetryV2Config(capture_message_content="SPAN_ONLY").capture_span_content is True
+    assert OpenTelemetryV2Config(capture_message_content="NO_CONTENT").capture_span_content is False
 
 
 def test_capture_message_content_normalizer_only_touches_strings():
