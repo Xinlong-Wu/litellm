@@ -79,23 +79,34 @@ _ERROR_CODE_HTTP_STATUS: Mapping[str, int] = MappingProxyType(
 )
 
 
-def _error_event_fields(error_obj: object) -> tuple[str, str | None, str | None]:
+def _error_event_fields(
+    error_obj: object,
+) -> tuple[
+    str,
+    str | None,
+    str | None,
+    str | Mapping[str, Any] | None,
+]:
     if isinstance(error_obj, dict):
         raw_message = error_obj.get("message")
         raw_type = error_obj.get("type")
         raw_code = error_obj.get("code")
+        raw_param = error_obj.get("param")
     elif error_obj is not None:
         raw_message = getattr(error_obj, "message", None)
         raw_type = getattr(error_obj, "type", None)
         raw_code = getattr(error_obj, "code", None)
+        raw_param = getattr(error_obj, "param", None)
     else:
         raw_message = None
         raw_type = None
         raw_code = None
-    message = str(raw_message) if raw_message is not None else "Response API in-stream error"
+        raw_param = None
+    message = raw_message if isinstance(raw_message, str) else "Response API in-stream error"
     error_type = raw_type if isinstance(raw_type, str) else None
     code = raw_code if isinstance(raw_code, str) else None
-    return message, error_type, code
+    param = raw_param if isinstance(raw_param, (str, dict)) else None
+    return message, error_type, code, param
 
 
 def _status_code_for_error_fields(error_type: str | None, error_code: str | None) -> int:
@@ -391,7 +402,7 @@ class BaseResponsesAPIStreamingIterator:
         """
         response_obj = getattr(self.completed_response, "response", None) if self.completed_response else None
         error_info = getattr(response_obj, "error", None) if response_obj else None
-        error_message, error_type, error_code = _error_event_fields(error_info)
+        error_message, error_type, error_code, _ = _error_event_fields(error_info)
         self._record_failed_response_usage(response_obj)
         exception = litellm.APIError(
             status_code=_status_code_for_error_fields(error_type, error_code),
@@ -426,13 +437,13 @@ class BaseResponsesAPIStreamingIterator:
         if chunk_type not in ("error", "response.failed"):
             return
 
-        error_obj: object = (
-            getattr(getattr(result, "response", None), "error", None)
-            if chunk_type == "response.failed"
-            else getattr(result, "error", None)
-        )
+        if chunk_type == "response.failed":
+            error_obj: object = getattr(getattr(result, "response", None), "error", None)
+        else:
+            nested_error_obj = getattr(result, "error", None)
+            error_obj = nested_error_obj if nested_error_obj is not None else result
 
-        error_message, error_type, error_code = _error_event_fields(error_obj)
+        error_message, error_type, error_code, error_param = _error_event_fields(error_obj)
         status_code = _status_code_for_error_fields(error_type, error_code)
         mapped_exception = litellm.APIError(
             status_code=status_code,
@@ -440,9 +451,18 @@ class BaseResponsesAPIStreamingIterator:
             llm_provider=self.custom_llm_provider or "",
             model=self.model or "",
         )
+        raw_sequence_number = getattr(result, "sequence_number", 0)
+        response_error_event = {
+            "type": "error",
+            "code": error_code,
+            "message": error_message,
+            "param": error_param if isinstance(error_param, str) else None,
+            "sequence_number": raw_sequence_number if isinstance(raw_sequence_number, int) else 0,
+        }
+        mapped_exception.__dict__["_litellm_response_error_event"] = response_error_event
         if 400 <= status_code < 500 and status_code != 429:
             raise mapped_exception
-        raise MidStreamFallbackError(
+        fallback_exception = MidStreamFallbackError(
             message=str(mapped_exception),
             model=self.model or "",
             llm_provider=self.custom_llm_provider or "",
@@ -450,6 +470,8 @@ class BaseResponsesAPIStreamingIterator:
             generated_content=self._generated_content,
             is_pre_first_chunk=not self._yielded_first_chunk,
         )
+        fallback_exception.__dict__["_litellm_response_error_event"] = response_error_event
+        raise fallback_exception
 
     def _get_completed_response_object(self) -> Any | None:
         openai_types = _get_openai_response_types()

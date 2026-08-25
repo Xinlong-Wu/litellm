@@ -1731,7 +1731,10 @@ class ErrorEventError(BaseLiteLLMOpenAIResponseObject):
 class ErrorEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.ERROR]
     sequence_number: int
-    error: ErrorEventError
+    code: Optional[str] = None
+    message: Optional[str] = None
+    param: str | Mapping[str, Any] | None = None
+    error: Optional[ErrorEventError] = None
 
 
 class GenericEvent(BaseLiteLLMOpenAIResponseObject):
