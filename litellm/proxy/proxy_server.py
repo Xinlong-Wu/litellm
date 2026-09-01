@@ -117,6 +117,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
     get_hidden_params_dict,
 )
 from litellm.types.utils import (
+    CallTypes,
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
@@ -384,6 +385,10 @@ from litellm.proxy.credential_endpoints.endpoints import router as credential_ro
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
     SPEND_LOG_CLEANUP_BOUND_SETTINGS,
     SpendLogCleanup,
+)
+from litellm.proxy.db.db_transaction_queue.spend_log_prompt_cleanup import (
+    SpendLogPromptCleanup,
+    parse_prompt_retention_seconds,
 )
 from litellm.proxy.db.exception_handler import (
     PrismaDBExceptionHandler,
@@ -7228,7 +7233,7 @@ class ProxyConfig:
                         db_guardrail_ids.add(guardrail_id)
                     try:
                         IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
-                            guardrail=cast(Guardrail, guardrail),
+                            guardrail=guardrail,
                         )
                     except Exception as e:  # noqa: BLE001  # one unloadable row must not stop the remaining guardrails
                         verbose_proxy_logger.error(
@@ -8005,6 +8010,43 @@ _SSE_FRAME_DELIMITERS: Final = ("\r\n\r\n", "\n\n", "\r\r")
 _MAX_RAW_SSE_BUFFER_CHARS: Final = 8 * 1024 * 1024
 
 
+def _is_responses_stream_request(request_data: Mapping[str, Any]) -> bool:
+    logging_obj = request_data.get("litellm_logging_obj")
+    if isinstance(logging_obj, dict):
+        call_type = logging_obj.get("call_type")
+    else:
+        call_type = getattr(logging_obj, "call_type", None)
+    return call_type in (CallTypes.responses.value, CallTypes.aresponses.value)
+
+
+def _responses_error_event_from_exception(exception: Exception, error_message: str) -> Mapping[str, Any]:
+    current_exception: Exception | None = exception
+    for _ in range(8):
+        if current_exception is None:
+            break
+        error_event = getattr(current_exception, "_litellm_response_error_event", None)
+        if isinstance(error_event, dict) and error_event.get("type") == "error":
+            return error_event
+        original_exception = getattr(current_exception, "original_exception", None)
+        if not isinstance(original_exception, Exception) or original_exception is current_exception:
+            break
+        current_exception = original_exception
+
+    raw_code = getattr(exception, "code", None)
+    if raw_code is None:
+        raw_code = getattr(exception, "status_code", 500)
+    raw_message = getattr(exception, "message", None)
+    raw_param = getattr(exception, "param", None)
+    raw_sequence_number = getattr(exception, "sequence_number", 0)
+    return {
+        "type": "error",
+        "code": str(raw_code) if raw_code is not None else None,
+        "message": raw_message if isinstance(raw_message, str) else error_message,
+        "param": raw_param if isinstance(raw_param, str) else None,
+        "sequence_number": raw_sequence_number if isinstance(raw_sequence_number, int) else 0,
+    }
+
+
 def _pop_complete_sse_frame(buffer: str) -> tuple[str | None, str]:
     delimiter_positions: Final = [
         (position, delimiter) for delimiter in _SSE_FRAME_DELIMITERS if (position := buffer.find(delimiter)) != -1
@@ -8441,13 +8483,17 @@ async def async_data_generator(
             # Including it in the SSE response leaks internal details to clients.
             error_msg = str(e)
 
-        proxy_exception: Final = ProxyException(
-            message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
-        )
-        error_returned: Final = json.dumps({"error": proxy_exception.to_dict()})
+        error_returned: Final[str]
+        if _is_responses_stream_request(request_data):
+            error_returned = json.dumps(_responses_error_event_from_exception(e, error_msg))
+        else:
+            proxy_exception: Final = ProxyException(
+                message=getattr(e, "message", error_msg),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", 500),
+            )
+            error_returned = json.dumps({"error": proxy_exception.to_dict()})
         stream_completed = True
         yield f"data: {error_returned}\n\n"
     finally:
@@ -9179,6 +9225,31 @@ class ProxyStartupEvent:
                     )
                 except ValueError:
                     verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value")
+
+        ### SPEND LOG PROMPT CLEANUP ###
+        prompt_retention_period = general_settings.get("maximum_spend_logs_prompt_retention_period")
+        prompt_retention_seconds = parse_prompt_retention_seconds(prompt_retention_period)
+        if prompt_retention_period is not None and prompt_retention_seconds is not None:
+            spend_log_prompt_cleanup = SpendLogPromptCleanup()
+            scheduler.add_job(
+                spend_log_prompt_cleanup.scrub_old_prompts,
+                "interval",
+                seconds=prompt_retention_seconds + random.randint(0, 60),
+                args=[prisma_client],
+                id="spend_log_prompt_cleanup_job",
+                replace_existing=True,
+                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+            )
+            verbose_proxy_logger.info(
+                "Spend log prompt cleanup scheduled every %s; scrubs prompts older than %s",
+                prompt_retention_period,
+                prompt_retention_period,
+            )
+        elif prompt_retention_period is not None:
+            verbose_proxy_logger.error(
+                "Invalid maximum_spend_logs_prompt_retention_period value: %s",
+                prompt_retention_period,
+            )
         ### CHECK BATCH COST ###
         if llm_router is not None and PROXY_BATCH_POLLING_ENABLED:
             try:

@@ -4268,7 +4268,9 @@ class Router:
         try:
             kwargs["model"] = model
             kwargs["prompt"] = prompt
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+            kwargs["num_retries"] = (
+                kwargs.get("num_retries") if kwargs.get("num_retries") is not None else self.num_retries
+            )
             kwargs.setdefault("metadata", {}).update({"model_group": model})
 
             # pick the one that is available (lowest TPM/RPM)

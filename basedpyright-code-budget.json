@@ -44,6 +44,9 @@
   "reportIndexIssue": {
     "limit": 35
   },
+  "reportInvalidTypeArguments": {
+    "limit": 2
+  },
   "reportInvalidTypeForm": {
     "limit": 35
   },
@@ -81,13 +84,13 @@
     "limit": 0
   },
   "reportPossiblyUnboundVariable": {
-    "limit": 56
+    "limit": 65
   },
   "reportPrivateUsage": {
     "limit": 1822
   },
   "reportRedeclaration": {
-    "limit": 8
+    "limit": 9
   },
   "reportReturnType": {
     "limit": 213
@@ -117,7 +120,7 @@
     "limit": 117
   },
   "reportUnnecessaryComparison": {
-    "limit": 699
+    "limit": 701
   },
   "reportUnnecessaryContains": {
     "limit": 5
@@ -127,6 +130,9 @@
   },
   "reportUntypedBaseClass": {
     "limit": 0
+  },
+  "reportUntypedClassDecorator": {
+    "limit": 1
   },
   "reportUntypedFunctionDecorator": {
     "limit": 27

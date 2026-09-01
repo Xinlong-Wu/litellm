@@ -1,72 +1,65 @@
 #!/bin/bash
+set -euo pipefail
 
-# # try except this script
-# set -e
-
-# print current dir 
-echo
-pwd
-
-
-# only run this step for litellm enterprise, we run this if enterprise/enterprise_ui/_enterprise.json exists
-if [ ! -f "enterprise/enterprise_ui/enterprise_colors.json" ]; then
-    echo "Admin UI - using default LiteLLM UI"
-    exit 0
-fi
-
-echo "Building Custom Admin UI..."
-
-# Install dependencies
-# Check if we are on macOS
-if [[ "$(uname)" == "Darwin" ]]; then
-    # Install dependencies using Homebrew
-    if ! command -v brew &> /dev/null; then
-        echo "Error: Homebrew not found. Please install Homebrew and try again."
-        exit 1
-    fi
-    brew update
-    brew install curl
-else
-    # Assume Linux, try using apt-get
-    if command -v apt-get &> /dev/null; then
-        apt-get update
-        apt-get install -y curl
-    elif command -v apk &> /dev/null; then
-        # Try using apk if apt-get is not available
-        apk update
-        apk add curl
-    else
-        echo "Error: Unsupported package manager. Cannot install dependencies."
-        exit 1
-    fi
-fi
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DASHBOARD_DIR="${REPO_ROOT}/ui/litellm-dashboard"
+NODE_VERSION="$(tr -d '[:space:]' < "${DASHBOARD_DIR}/.nvmrc")"
 NVM_VERSION="v0.40.4"
 NVM_CHECKSUM="4b7412c49960c7d31e8df72da90c1fb5b8cccb419ac99537b737028d497aba4f"
-NVM_SCRIPT=$(mktemp)
-trap 'rm -f "$NVM_SCRIPT"' EXIT
-curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh" -o "$NVM_SCRIPT"
-if command -v sha256sum &>/dev/null; then
-  echo "${NVM_CHECKSUM}  ${NVM_SCRIPT}" | sha256sum -c -
-elif command -v shasum &>/dev/null; then
-  echo "${NVM_CHECKSUM}  ${NVM_SCRIPT}" | shasum -a 256 -c -
+
+ensure_curl() {
+  if command -v curl >/dev/null 2>&1; then
+    return
+  fi
+
+  echo "curl is required to install nvm. Install curl and rerun this script." >&2
+  exit 1
+}
+
+load_nvm() {
+  export NVM_DIR="${NVM_DIR:-${HOME}/.nvm}"
+
+  if [ -s "${NVM_DIR}/nvm.sh" ]; then
+    . "${NVM_DIR}/nvm.sh"
+  fi
+}
+
+install_nvm() {
+  ensure_curl
+
+  local nvm_script
+  nvm_script="$(mktemp)"
+  trap "rm -f '${nvm_script}'" EXIT
+
+  curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh" -o "${nvm_script}"
+  if command -v sha256sum >/dev/null 2>&1; then
+    echo "${NVM_CHECKSUM}  ${nvm_script}" | sha256sum -c -
+  elif command -v shasum >/dev/null 2>&1; then
+    echo "${NVM_CHECKSUM}  ${nvm_script}" | shasum -a 256 -c -
+  else
+    echo "No sha256 tool found; cannot verify nvm checksum" >&2
+    exit 1
+  fi
+
+  bash "${nvm_script}"
+  load_nvm
+}
+
+load_nvm
+if ! command -v nvm >/dev/null 2>&1; then
+  install_nvm
+fi
+
+nvm install "${NODE_VERSION}"
+nvm use "${NODE_VERSION}"
+
+if [ -f "${REPO_ROOT}/enterprise/enterprise_ui/enterprise_colors.json" ]; then
+  echo "Building enterprise Admin UI colors"
+  cp "${REPO_ROOT}/enterprise/enterprise_ui/enterprise_colors.json" "${DASHBOARD_DIR}/ui_colors.json"
 else
-  echo "No sha256 tool found; cannot verify nvm checksum"; exit 1
-fi || { echo "nvm checksum verification failed"; exit 1; }
-bash "$NVM_SCRIPT"
-source ~/.nvm/nvm.sh
-NODE_VERSION="$(cat ui/litellm-dashboard/.nvmrc)"
-nvm install "v${NODE_VERSION}"
-nvm use "v${NODE_VERSION}"
+  echo "Building default LiteLLM Admin UI"
+fi
 
-
-# cd in to /ui/litellm-dashboard
-cd ui/litellm-dashboard
-
-# ensure have access to build_ui.sh
-chmod +x ./build_ui.sh
-
-# run ./build_ui.sh
-./build_ui.sh
-
-# return to root directory
-cd ../..
+cd "${DASHBOARD_DIR}"
+npm ci
+bash ./build_ui.sh

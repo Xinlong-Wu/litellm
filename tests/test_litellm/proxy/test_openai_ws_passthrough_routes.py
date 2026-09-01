@@ -68,9 +68,7 @@ async def test_openai_websocket_accepts_first_client_subprotocol():
     websocket = _mock_websocket(
         "/openai/v1/realtime",
         "model=gpt-4o-realtime-preview",
-        headers={
-            "sec-websocket-protocol": "realtime, openai-insecure-api-key.sk-abc, openai-beta.realtime-v1"
-        },
+        headers={"sec-websocket-protocol": "realtime, openai-insecure-api-key.sk-abc, openai-beta.realtime-v1"},
     )
 
     with (
@@ -90,7 +88,8 @@ async def test_openai_websocket_accepts_first_client_subprotocol():
         )
 
     websocket.accept.assert_awaited_once_with(subprotocol="realtime")
-    assert mock_ws.await_args.kwargs["accept_websocket"] is False
+    forwarding_kwargs = mock_ws.await_args.kwargs
+    assert forwarding_kwargs["accept_websocket"] is False
     websocket.close.assert_not_awaited()
 
 
@@ -115,7 +114,8 @@ async def test_openai_websocket_closes_cleanly_when_provider_credentials_missing
         )
 
     websocket.close.assert_awaited_once()
-    assert websocket.close.await_args.kwargs["code"] == 1011
+    close_kwargs = websocket.close.await_args.kwargs
+    assert close_kwargs["code"] == 1011
     websocket.accept.assert_not_awaited()
     mock_ws.assert_not_awaited()
 
@@ -143,7 +143,8 @@ async def test_openai_websocket_rejects_model_restricted_keys(user_api_key_dict)
         )
 
     websocket.close.assert_awaited_once()
-    assert websocket.close.await_args.kwargs["code"] == 1008
+    close_kwargs = websocket.close.await_args.kwargs
+    assert close_kwargs["code"] == 1008
     websocket.accept.assert_not_awaited()
     mock_ws.assert_not_awaited()
 
@@ -178,4 +179,6 @@ async def test_openai_websocket_allows_unrestricted_keys(user_api_key_dict):
         )
 
     mock_ws.assert_awaited_once()
+    forwarding_kwargs = mock_ws.await_args.kwargs
+    assert forwarding_kwargs["endpoint"] == "/openai/v1/responses"
     websocket.close.assert_not_awaited()
