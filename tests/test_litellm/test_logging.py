@@ -1,16 +1,16 @@
 import ast
 import asyncio
+import glob
 import json
+import logging
+import logging.handlers
 import os
+import re
 import sys
 from pathlib import Path
 from typing import List
 
 import pytest
-
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system-path
-import logging
-import sys
 
 import litellm
 from litellm._logging import (
@@ -18,8 +18,18 @@ from litellm._logging import (
     CorrelationContextFilter,
     CorrelationPlainFormatter,
     JsonFormatter,
+    SecretRedactionFilter,
+    StdoutLogTruncationFilter,
+    _SharedRotatingFileHandler,
+    _get_app_file_handler,
+    _get_uvicorn_log_config,
     _initialize_loggers_with_handler,
+    _lockfile_for,
+    _reattach_app_file_handler,
+    _stdout_truncation_marker,
     _turn_on_json,
+    add_file_logging,
+    resolve_uvicorn_log_file,
     session_id_var,
     set_session_id,
     set_trace_id,
@@ -28,6 +38,7 @@ from litellm._logging import (
     verbose_proxy_logger,
     verbose_router_logger,
 )
+from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload
 
@@ -175,12 +186,47 @@ def test_json_formatter_parses_embedded_python_dict_repr():
     # Python dict parsed and promoted to first-class properties
     assert obj["model_name"] == "text-embedding-3-large"
     assert "litellm_params" in obj
-    assert obj["litellm_params"]["api_key"] == "sk**********"
+    # Redacted, not passed through: SecretRedactionFilter already collapses this
+    # pair in the plain path before any formatter sees it, so the JSON path matching
+    # it is production parity. The key survives because redaction is per-value here.
+    assert obj["litellm_params"]["api_key"] == "REDACTED"
     assert obj["litellm_params"]["tpm"] == 1000000
     assert obj["litellm_params"]["use_in_pass_through"] is False
     assert "model_info" in obj
     assert obj["model_info"]["id"] == "a624b057aec64ada48311"
     assert obj["model_info"]["db_model"] is False
+
+
+def test_json_formatter_output_stays_parseable_when_a_secret_is_redacted():
+    """Redaction must collapse the value only, never the surrounding JSON member.
+
+    Redacting the serialized document turned '"api_key": "sk-..."' into a bare
+    REDACTED token, so the line stopped being valid JSON entirely.
+    """
+    formatter = JsonFormatter()
+    record = logging.LogRecord(
+        name="LiteLLM",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg="calling deployment",
+        args=(),
+        exc_info=None,
+    )
+    record.deployment = {
+        "api_key": "sk-abcdefghijklmnopqrstuvwxyz0123456789",
+        "aws_secret_access_key": "wJalrXUtnFEMIQAfakeKEYbPxRfiCYEXAMPLEKEY",
+        "aws_region_name": "us-east-1",
+        "nested": {"tokens": ["Bearer abcdefghijklmnop", "keep-me"]},
+    }
+
+    obj = json.loads(formatter.format(record))
+
+    assert obj["deployment"]["api_key"] == "REDACTED"
+    assert obj["deployment"]["aws_secret_access_key"] == "REDACTED"
+    # Non-secret siblings stay legible so the logs remain useful
+    assert obj["deployment"]["aws_region_name"] == "us-east-1"
+    assert obj["deployment"]["nested"]["tokens"] == ["REDACTED", "keep-me"]
 
 
 def test_json_formatter_includes_component_field():
@@ -621,6 +667,171 @@ def test_set_trace_id_strips_control_characters():
         trace_id_var.reset(token)
 
 
+_MARKER_RE = re.compile(rf"\.\.\. \({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped (\d+) chars\..*?\) \.\.\.", re.S)
+
+
+def _extract_marker(text: str) -> "re.Match[str] | None":
+    return _MARKER_RE.search(text)
+
+
+def _make_record(level: int, msg: str, args=(), exc_info=None) -> logging.LogRecord:
+    return logging.LogRecord(
+        name="LiteLLM Router",
+        level=level,
+        pathname="",
+        lineno=0,
+        msg=msg,
+        args=args,
+        exc_info=exc_info,
+    )
+
+
+def test_oversized_info_record_is_truncated(monkeypatch):
+    """An error string echoing a huge request payload must not reach stdout in full."""
+    monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
+    payload = "p" * 100_000
+    record = _make_record(logging.INFO, "litellm.acompletion(model=%s) Exception %s", ("gpt-4", payload))
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    message = record.getMessage()
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in message
+    assert len(message) <= 500
+    assert message.startswith("litellm.acompletion(model=gpt-4) Exception ppp")
+    assert message.endswith("ppp")
+
+    marker = _extract_marker(message)
+    assert marker is not None
+    kept, skipped = len(message) - len(marker.group(0)), int(marker.group(1))
+    assert kept + skipped == 43 + len(payload)
+
+
+def test_truncated_message_fits_the_configured_cap(monkeypatch):
+    """The cap is the whole point of the setting, so the marker has to be paid for out of
+    the budget instead of appended on top of a limit-sized head and tail."""
+    monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
+    record = _make_record(logging.ERROR, "Exception %s", ("p" * 2000,))
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    message = record.getMessage()
+    assert _extract_marker(message) is not None
+    assert len(message) == 500
+
+
+@pytest.mark.parametrize("payload_len", [501, 512, 1000, 9999, 100_000])
+def test_truncated_message_never_exceeds_the_cap(monkeypatch, payload_len):
+    monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
+    record = _make_record(logging.ERROR, "%s", ("p" * payload_len,))
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert len(record.getMessage()) <= 500
+
+
+_NO_BUDGET_PAYLOAD = "p" * 2000
+_MARKER_SIZED_CAP = len(_stdout_truncation_marker(len(_NO_BUDGET_PAYLOAD)))
+
+
+@pytest.mark.parametrize("cap", [_MARKER_SIZED_CAP, _MARKER_SIZED_CAP - 1, 100])
+def test_cap_leaving_no_room_for_the_marker_still_bounds_output(monkeypatch, cap):
+    """An operator can set the cap at or below the marker's own length, leaving nothing to
+    spend on a head and tail, and the output still has to fit."""
+    monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", str(cap))
+    record = _make_record(logging.ERROR, "%s", (_NO_BUDGET_PAYLOAD,))
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert len(record.getMessage()) == cap
+
+
+def test_debug_record_is_not_truncated(monkeypatch):
+    """--detailed_debug exists to dump full payloads, so DEBUG records pass through."""
+    monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
+    payload = "p" * 100_000
+    record = _make_record(logging.DEBUG, "raw request %s", (payload,))
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert record.getMessage() == f"raw request {payload}"
+
+
+def test_truncation_disabled_by_zero_limit(monkeypatch):
+    monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "0")
+    payload = "p" * 100_000
+    record = _make_record(logging.ERROR, "Exception %s", (payload,))
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert record.getMessage() == f"Exception {payload}"
+
+
+def test_oversized_traceback_is_truncated(monkeypatch):
+    """verbose_proxy_logger.exception() re-logs the payload inside the traceback too."""
+    monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
+    try:
+        raise ValueError("payload " + "p" * 100_000)
+    except ValueError:
+        exc_info = sys.exc_info()
+    record = _make_record(logging.ERROR, "Exception occured", exc_info=exc_info)
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert record.exc_text is not None
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in record.exc_text
+    assert len(record.exc_text) <= 500
+    assert "Traceback (most recent call last)" in record.exc_text
+
+
+def test_falsy_exc_info_is_not_formatted(monkeypatch):
+    """Callers pass exc_info=False, which logging leaves on the record as a bool."""
+    monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
+    record = _make_record(logging.WARNING, "skipping malformed endpoint %s", ("p" * 100_000,), exc_info=False)
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert record.exc_text is None
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in record.getMessage()
+
+
+def test_secret_filter_keeps_truncated_traceback(monkeypatch):
+    """SecretRedactionFilter runs after truncation, so it must redact the capped
+    traceback instead of reformatting the full one from exc_info."""
+    monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
+    try:
+        raise ValueError("sk-1234567890abcdefghij payload " + "p" * 100_000)
+    except ValueError:
+        exc_info = sys.exc_info()
+    record = _make_record(logging.ERROR, "Exception occured", exc_info=exc_info)
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+    assert SecretRedactionFilter().filter(record) is True
+
+    assert record.exc_text is not None
+    assert len(record.exc_text) <= 500
+    assert "sk-1234567890abcdefghij" not in record.exc_text
+
+
+def test_truncation_filter_survives_json_reconfiguration():
+    """The cap lives on the loggers, so swapping handlers (JSON mode) can't drop it."""
+    _turn_on_json()
+
+    for lg in (verbose_logger, verbose_router_logger, verbose_proxy_logger):
+        assert any(isinstance(f, StdoutLogTruncationFilter) for f in lg.filters), f"{lg.name} lost stdout truncation"
+
+
+def test_oversized_error_is_truncated_end_to_end(monkeypatch, caplog):
+    """The router's own exception log line must come out bounded, not just the filter in isolation."""
+    monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
+
+    with caplog.at_level(logging.INFO, logger="LiteLLM Router"):
+        verbose_router_logger.info("litellm.acompletion(model=%s) Exception %s", "gpt-4", "p" * 100_000)
+
+    emitted = "".join(record.getMessage() for record in caplog.records)
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in emitted
+    assert len(emitted) <= 500
+
+
 def test_set_session_id_bounds_length():
     """set_session_id() must bound length so an oversized caller-supplied value
     isn't repeated across every log line for the request."""
@@ -634,19 +845,6 @@ def test_set_session_id_bounds_length():
 # ---------------------------------------------------------------------------
 # File logging: write logs to a directory (daily rotation)
 # ---------------------------------------------------------------------------
-import glob
-import logging.handlers
-
-from litellm._logging import (
-    add_file_logging,
-    resolve_uvicorn_log_file,
-    _get_app_file_handler,
-    _get_uvicorn_log_config,
-    _lockfile_for,
-    _reattach_app_file_handler,
-    _SharedRotatingFileHandler,
-)
-
 _FILE_LOG_LOGGERS = [verbose_logger, verbose_router_logger, verbose_proxy_logger]
 
 
