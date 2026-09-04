@@ -16,7 +16,9 @@ from litellm.constants import (
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
-    get_metadata_variable_name_from_kwargs,
+    get_metadata_variable_name_from_kwargs as _get_metadata_variable_name_from_kwargs,
+)
+from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
 )
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
@@ -53,6 +55,9 @@ GUARDRAIL_SCAN_IDS_METADATA_KEY: Final = "guardrail_scan_ids"
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+
+
+get_metadata_variable_name_from_kwargs: Final = _get_metadata_variable_name_from_kwargs
 
 
 @dataclass(frozen=True, slots=True)
@@ -402,20 +407,22 @@ def initialize_callbacks_on_proxy(
 
 def get_model_group_from_litellm_kwargs(kwargs: dict) -> str | None:
     _litellm_params: Final = kwargs.get("litellm_params", None) or {}
-    _metadata: Final = _litellm_params.get(get_metadata_variable_name_from_kwargs(kwargs)) or {}
-    _model_group: Final = _metadata.get("model_group", None)
-    if _model_group is not None:
-        return _model_group
-
+    for metadata_key in ("litellm_metadata", "metadata"):
+        metadata = _litellm_params.get(metadata_key)
+        if isinstance(metadata, dict):
+            model_group = metadata.get("model_group")
+            if isinstance(model_group, str):
+                return model_group
     return None
 
 
 def get_model_group_from_request_data(data: dict) -> str | None:
-    _metadata: Final = data.get("metadata", None) or {}
-    _model_group: Final = _metadata.get("model_group", None)
-    if _model_group is not None:
-        return _model_group
-
+    for metadata_key in ("litellm_metadata", "metadata"):
+        metadata = data.get(metadata_key)
+        if isinstance(metadata, dict):
+            model_group = metadata.get("model_group")
+            if isinstance(model_group, str):
+                return model_group
     return None
 
 
@@ -427,21 +434,41 @@ def get_remaining_tokens_and_requests_from_request_data(data: dict) -> dict[str,
 
     """
     headers: Final = {}
-    _metadata: Final = data.get("metadata", None) or {}
+    metadata_buckets: Final = tuple(
+        bucket
+        for metadata_key in ("litellm_metadata", "metadata")
+        if isinstance(bucket := data.get(metadata_key), dict)
+    )
     model_group: Final = get_model_group_from_request_data(data)
+    if model_group is None:
+        return headers
 
     # The h11 package considers "/" or ":" invalid and raise a LocalProtocolError
     h11_model_group_name: Final = model_group.replace("/", "-").replace(":", "-") if model_group else None
 
     # Remaining Requests
     remaining_requests_variable_name: Final = f"litellm-key-remaining-requests-{model_group}"
-    remaining_requests: Final = _metadata.get(remaining_requests_variable_name, None)
+    remaining_requests: Final = next(
+        (
+            bucket.get(remaining_requests_variable_name)
+            for bucket in metadata_buckets
+            if remaining_requests_variable_name in bucket
+        ),
+        None,
+    )
     if remaining_requests:
         headers[f"x-litellm-key-remaining-requests-{h11_model_group_name}"] = remaining_requests
 
     # Remaining Tokens
     remaining_tokens_variable_name: Final = f"litellm-key-remaining-tokens-{model_group}"
-    remaining_tokens: Final = _metadata.get(remaining_tokens_variable_name, None)
+    remaining_tokens: Final = next(
+        (
+            bucket.get(remaining_tokens_variable_name)
+            for bucket in metadata_buckets
+            if remaining_tokens_variable_name in bucket
+        ),
+        None,
+    )
     if remaining_tokens:
         headers[f"x-litellm-key-remaining-tokens-{h11_model_group_name}"] = remaining_tokens
 
