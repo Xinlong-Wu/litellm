@@ -797,7 +797,7 @@ async def test_two_models_on_one_key_do_not_share_a_budget_window():
 
 
 @pytest.mark.asyncio
-async def test_no_increment_when_no_scope_budgets_the_model():
+async def test_no_increment_when_no_scope_budgets_the_model():  # test-quality-ok: no-spend side-effect contract
     dual_cache = DualCache()
     limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
     with patch.object(limiter, "_increment_spend_for_key", new_callable=AsyncMock) as mock_increment:

@@ -21,6 +21,7 @@ import litellm
 from litellm import token_counter
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
 from litellm.types.router import RouterCacheEnum, RouterErrors
 from litellm.utils import get_utc_datetime
 
@@ -249,12 +250,8 @@ def _stash_reservation_in_metadata(
         ITPM_CACHE_KEY: itpm_cache_key,
         OTPM_CACHE_KEY: otpm_cache_key,
     }
-    for channel in ("metadata", "litellm_metadata"):
-        existing = request_kwargs.get(channel)
-        if isinstance(existing, dict):
-            existing.update(reservation)
-        elif channel == "metadata":
-            request_kwargs[channel] = dict(reservation)
+    _, metadata_bucket = get_or_create_metadata_bucket(request_kwargs)
+    metadata_bucket.update(reservation)
 
 
 def _extract_reservation(reservation: Mapping[str, int | str | None]) -> tuple[int, int, str | None, str | None]:
@@ -281,19 +278,30 @@ def _reservation_channels(kwargs: Mapping[str, object] | None) -> tuple[object, 
     """
     if not isinstance(kwargs, dict):
         return ()
-    top_level: Final = (kwargs.get("metadata"), kwargs.get("litellm_metadata"))
+    top_level: Final = (kwargs.get("litellm_metadata"), kwargs.get("metadata"))
     litellm_params: Final = _as_mutable_mapping(kwargs.get("litellm_params"))
-    from_params: Final = () if litellm_params is None else (litellm_params.get("metadata"),)
+    from_params: Final = (
+        () if litellm_params is None else (litellm_params.get("litellm_metadata"), litellm_params.get("metadata"))
+    )
     standard_logging_object: Final = _as_mutable_mapping(kwargs.get("standard_logging_object"))
-    from_logging_object: Final = () if standard_logging_object is None else (standard_logging_object.get("metadata"),)
+    from_logging_object: Final = (
+        ()
+        if standard_logging_object is None
+        else (standard_logging_object.get("litellm_metadata"), standard_logging_object.get("metadata"))
+    )
     return top_level + from_params + from_logging_object
 
 
-def _read_reservation_from_kwargs(kwargs: Mapping[str, object] | None) -> tuple[int, int, str | None, str | None]:
+def read_io_token_reservation_from_kwargs(
+    kwargs: Mapping[str, object] | None,
+) -> tuple[int, int, str | None, str | None]:
     for channel_dict in _reservation_channels(kwargs):
         if isinstance(channel_dict, dict) and ITPM_RESERVED_KEY in channel_dict:
             return _extract_reservation(channel_dict)
     return 0, 0, None, None
+
+
+_read_reservation_from_kwargs: Final = read_io_token_reservation_from_kwargs
 
 
 def _clear_reservation_from_kwargs(kwargs: Mapping[str, object] | None) -> None:
@@ -531,7 +539,7 @@ def io_token_reconcile_success(
 ) -> None:
     request_kwargs: Final[Mapping[str, object] | None] = kwargs
     response: Final[object] = response_obj
-    itpm_reserved, otpm_reserved, itpm_key, otpm_key = _read_reservation_from_kwargs(request_kwargs)
+    itpm_reserved, otpm_reserved, itpm_key, otpm_key = read_io_token_reservation_from_kwargs(request_kwargs)
     if itpm_key is None and otpm_key is None:
         return
 
@@ -584,7 +592,7 @@ async def async_io_token_reconcile_success(
 ) -> None:
     request_kwargs: Final[Mapping[str, object] | None] = kwargs
     response: Final[object] = response_obj
-    itpm_reserved, otpm_reserved, itpm_key, otpm_key = _read_reservation_from_kwargs(request_kwargs)
+    itpm_reserved, otpm_reserved, itpm_key, otpm_key = read_io_token_reservation_from_kwargs(request_kwargs)
     if itpm_key is None and otpm_key is None:
         return
 
@@ -641,7 +649,7 @@ def io_token_refund_failure(
     kwargs: Any,
 ) -> None:
     request_kwargs: Final[Mapping[str, object] | None] = kwargs
-    itpm_reserved, otpm_reserved, itpm_key, otpm_key = _read_reservation_from_kwargs(request_kwargs)
+    itpm_reserved, otpm_reserved, itpm_key, otpm_key = read_io_token_reservation_from_kwargs(request_kwargs)
     if itpm_key is None and otpm_key is None:
         return
     if itpm_key is not None and itpm_reserved > 0:
@@ -694,7 +702,7 @@ async def async_io_token_refund_failure(
     parent_otel_span: Span | None = None,
 ) -> None:
     request_kwargs: Final[Mapping[str, object] | None] = kwargs
-    itpm_reserved, otpm_reserved, itpm_key, otpm_key = _read_reservation_from_kwargs(request_kwargs)
+    itpm_reserved, otpm_reserved, itpm_key, otpm_key = read_io_token_reservation_from_kwargs(request_kwargs)
     if itpm_key is None and otpm_key is None:
         return
     if itpm_key is not None and itpm_reserved > 0:

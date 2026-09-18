@@ -23,7 +23,7 @@ def _otel_runtime() -> "tuple[Callable[[str], Any], Callable[..., None]] | None"
     """
     try:
         from litellm.integrations.otel import logger
-    except Exception:
+    except ImportError:
         return None
     return (logger.phase_span, logger.seed_request_identity)
 

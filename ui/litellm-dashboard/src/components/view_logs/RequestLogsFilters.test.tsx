@@ -335,7 +335,6 @@ describe("RequestLogsFilters", () => {
 
     expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.ERROR_CODE, "418");
   });
-
   it("selecting All Requests clears the cache filter", async () => {
     const user = userEvent.setup();
     const { set } = renderFilters({ [LOG_FILTER_IDS.CACHE_STATUS]: "hit" });

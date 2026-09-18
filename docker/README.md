@@ -6,10 +6,22 @@ This guide provides instructions for building and running the LiteLLM applicatio
 
 - Docker
 - Docker Compose
+- Node.js via nvm (installed automatically by `docker/build_admin_ui.sh` if missing)
 
 ## Building and Running the Application
 
-To build and run the application, you will use the `docker-compose.yml` file located in the root of the project. This file is configured to use the `Dockerfile.non_root` for a secure, non-root container environment.
+Docker images expect the Admin UI export to exist in `litellm/proxy/_experimental/out` before Docker build starts. Use `docker/build_image.sh` for local image builds; it builds the UI first, then calls `docker build`.
+
+```bash
+docker/build_image.sh --tag litellm:local
+```
+
+To use Docker Compose, build the UI first:
+
+```bash
+docker/build_admin_ui.sh
+docker compose up -d --build
+```
 
 ### 1. Set the Master Key
 
@@ -28,12 +40,14 @@ Replace `your-secret-key` with a strong, randomly generated secret.
 Once you have set the `LITELLM_MASTER_KEY`, you can build and run the containers using the following command:
 
 ```bash
+docker/build_admin_ui.sh
 docker compose up -d --build
 ```
 
 This command will:
 
--   Build the Docker image using `Dockerfile.non_root`.
+-   Build the Admin UI static export before Docker starts.
+-   Build the Docker image using the root `Dockerfile`.
 -   Start the `litellm`, `litellm_db`, and `prometheus` services in detached mode (`-d`).
 -   The `--build` flag ensures that the image is rebuilt if there are any changes to the Dockerfile or the application code.
 
@@ -64,6 +78,7 @@ docker compose down
 To ensure changes are safe for non-root, read-only root filesystems and restricted egress, always validate with the hardened compose file:
 
 ```bash
+docker/build_admin_ui.sh
 docker compose -f docker-compose.yml -f docker-compose.hardened.yml build --no-cache
 docker compose -f docker-compose.yml -f docker-compose.hardened.yml up -d
 ```
@@ -88,5 +103,6 @@ This command should succeed (showing engine versions) even with `--network none`
 
 ## Troubleshooting
 
+-   **`Admin UI assets missing`**: Run `docker/build_admin_ui.sh` before `docker build` or use `docker/build_image.sh`, which does this automatically.
 -   **`build_admin_ui.sh: not found`**: This error can occur if the Docker build context is not set correctly. Ensure that you are running the `docker-compose` command from the root of the project.
 -   **`Master key is not initialized`**: This error means the `LITELLM_MASTER_KEY` environment variable is not set. Make sure you have created a `.env` file in the project root with the `LITELLM_MASTER_KEY` defined.

@@ -1686,6 +1686,7 @@ describe("TeamInfoView - which team member fields reach the update payload depen
     expect(payload).not.toHaveProperty("team_member_budget");
     expect(payload).not.toHaveProperty("team_member_tpm_limit");
     expect(payload).not.toHaveProperty("team_member_rpm_limit");
+    expect(payload).not.toHaveProperty("team_member_model_group_max_budget");
     expect(payload).not.toHaveProperty("default_team_member_models");
 
     const wireBody = JSON.parse(JSON.stringify(payload));
@@ -1705,6 +1706,7 @@ describe("TeamInfoView - which team member fields reach the update payload depen
     expect(payload.team_member_budget).toBe(42);
     expect(payload.team_member_tpm_limit).toBe(11);
     expect(payload.team_member_rpm_limit).toBe(22);
+    expect(payload.team_member_model_group_max_budget).toEqual({});
     expect(payload.default_team_member_models).toEqual(["gpt-4"]);
   });
 
@@ -1881,6 +1883,7 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
       team_member_budget: 42,
       team_member_tpm_limit: 11,
       team_member_rpm_limit: 22,
+      team_member_model_group_max_budget: {},
       default_team_member_models: ["gpt-4"],
       object_permission: { ...mcpPermissions, search_tools: ["tool-a"] },
     };

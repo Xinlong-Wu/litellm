@@ -40,6 +40,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     policies: list[str] = []
     model_spend: dict | None = {}
     model_max_budget: dict | None = {}
+    model_group_max_budget: dict | None = {}
     created_at: datetime | None = None
     updated_at: datetime | None = None
     organization_memberships: list[LiteLLM_OrganizationMembershipTable] | None = None

@@ -4,6 +4,7 @@ Anthropic CountTokens API transformation logic.
 This module handles the transformation of requests to Anthropic's CountTokens API format.
 """
 
+import os
 from typing import Any, Final
 
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
@@ -19,14 +20,36 @@ class AnthropicCountTokensConfig:
     - Response: {"input_tokens": <number>}
     """
 
-    def get_anthropic_count_tokens_endpoint(self) -> str:
+    def get_anthropic_count_tokens_endpoint(self, api_base: str | None = None) -> str:
         """
         Get the Anthropic CountTokens API endpoint.
+
+        Resolution order:
+        1. Explicit ``api_base`` (from the deployment's ``litellm_params``)
+        2. ``ANTHROPIC_COUNT_TOKENS_API_BASE`` / ``ANTHROPIC_API_BASE`` env var
+        3. Anthropic's public endpoint
+
+        A bare base URL (e.g. ``http://host:8317`` or ``.../v1``) is normalized to
+        the full ``/v1/messages/count_tokens`` path so an OpenAI-compatible upstream
+        proxy can serve the request. A URL that already targets the count_tokens
+        endpoint is used as-is.
 
         Returns:
             The endpoint URL for the CountTokens API
         """
-        return "https://api.anthropic.com/v1/messages/count_tokens"
+        count_tokens_path: Final = "/v1/messages/count_tokens"
+        configured_base: Final = (
+            api_base or os.getenv("ANTHROPIC_COUNT_TOKENS_API_BASE") or os.getenv("ANTHROPIC_API_BASE")
+        )
+        if not configured_base:
+            return "https://api.anthropic.com" + count_tokens_path
+
+        normalized_base: Final = configured_base.rstrip("/")
+        if normalized_base.endswith("/messages/count_tokens"):
+            return normalized_base
+        if normalized_base.endswith("/v1"):
+            return normalized_base + "/messages/count_tokens"
+        return normalized_base + count_tokens_path
 
     def transform_request_to_count_tokens(
         self,

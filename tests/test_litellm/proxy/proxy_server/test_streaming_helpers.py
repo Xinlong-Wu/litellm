@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -870,6 +871,64 @@ async def test_async_data_generator_mid_stream_exception_yields_error_payload(
 
     # First entry is the successful "partial" chunk (bytes), last is the error.
     assert any(isinstance(item, str) and item.startswith('data: {"error":') for item in out)
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_responses_exception_yields_top_level_error_event(
+    monkeypatch,
+):
+    _patch_logging_flags(monkeypatch)
+
+    async def _noop_failure(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(ps.proxy_logging_obj, "post_call_failure_hook", _noop_failure)
+
+    error_event = {
+        "type": "error",
+        "code": "cyber_policy",
+        "message": "Request blocked by upstream policy",
+        "param": "input",
+        "sequence_number": 7,
+    }
+    stream_error = RuntimeError("mapped upstream error")
+    setattr(stream_error, "_litellm_response_error_event", error_event)
+    out = []
+    async for line in async_data_generator(
+        response=_async_iter_raises(stream_error),
+        user_api_key_dict=_user_auth(),
+        request_data={"litellm_logging_obj": SimpleNamespace(call_type="aresponses")},
+    ):
+        out.append(line)
+
+    assert json.loads(out[-1].removeprefix("data: ").removesuffix("\n\n")) == error_event
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_responses_exception_builds_error_event(monkeypatch):
+    _patch_logging_flags(monkeypatch)
+
+    async def _noop_failure(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(ps.proxy_logging_obj, "post_call_failure_hook", _noop_failure)
+
+    out = []
+    async for line in async_data_generator(
+        response=_async_iter_raises(RuntimeError("upstream blew up")),
+        user_api_key_dict=_user_auth(),
+        request_data={"litellm_logging_obj": SimpleNamespace(call_type="responses")},
+    ):
+        out.append(line)
+
+    payload = json.loads(out[-1].removeprefix("data: ").removesuffix("\n\n"))
+    assert payload == {
+        "type": "error",
+        "code": "500",
+        "message": "upstream blew up",
+        "param": None,
+        "sequence_number": 0,
+    }
 
 
 # ---------------------------------------------------------------------------
