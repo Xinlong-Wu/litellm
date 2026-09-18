@@ -20,11 +20,17 @@ from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation
     transform_openai_input_gemini_embed_content,
 )
 from litellm.types.llms.vertex_ai import VertexAIBatchEmbeddingsResponseObject
-from litellm.types.utils import EmbeddingResponse
+from litellm.types.utils import EmbeddingResponse, ModelInfo
 
 
 IMAGE_DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAIAQMAAAD+wSzIAAAABlBMVEX///+/v7+jQ3Y5AAAADklEQVQI12P4AIX8EAgALgAD/aNpbtEAAAAASUVORK5CYII"
 GCS_URL = "gs://my-bucket/image.png"
+EMBEDDING_MULTIMODAL_MODEL_INFO = ModelInfo(
+    input_cost_per_token=2e-7,
+    input_cost_per_image=0.00012,
+    input_cost_per_audio_per_second=0.00016,
+    input_cost_per_video_per_second=0.00079,
+)
 
 
 class TestIsMultimodalInput:
@@ -330,6 +336,7 @@ class TestProcessEmbedContentResponseUsage:
             model=self.MODEL,
             usage=result.usage,
             custom_llm_provider="vertex_ai",
+            model_info=EMBEDDING_MULTIMODAL_MODEL_INFO,
         )
         assert prompt_cost > 0
 
@@ -355,6 +362,7 @@ class TestProcessEmbedContentResponseUsage:
             model=self.MODEL,
             usage=result.usage,
             custom_llm_provider="vertex_ai",
+            model_info=EMBEDDING_MULTIMODAL_MODEL_INFO,
         )
         assert prompt_cost > 0
 
@@ -429,6 +437,7 @@ class TestProcessEmbedContentResponseUsage:
             model=self.MODEL,
             usage=result.usage,
             custom_llm_provider="vertex_ai",
+            model_info=EMBEDDING_MULTIMODAL_MODEL_INFO,
         )
         assert prompt_cost == pytest.approx(0.00012)
 
@@ -464,6 +473,7 @@ class TestProcessEmbedContentResponseUsage:
             model=self.MODEL,
             usage=result.usage,
             custom_llm_provider="vertex_ai",
+            model_info=EMBEDDING_MULTIMODAL_MODEL_INFO,
         )
         assert prompt_cost == pytest.approx(2.0 * 0.00016)
 
@@ -498,6 +508,7 @@ class TestProcessEmbedContentResponseUsage:
             model=self.MODEL,
             usage=result.usage,
             custom_llm_provider="vertex_ai",
+            model_info=EMBEDDING_MULTIMODAL_MODEL_INFO,
         )
         # 1 floor text token at 2e-7 + 2s of video at 7.9e-4 + 2s of audio at 1.6e-4
         assert prompt_cost == pytest.approx(1 * 2e-7 + 2 * 0.00079 + 2 * 0.00016)
