@@ -1314,7 +1314,7 @@ def test_openai_models_in_model_info(monkeypatch):
     ), f"The following models should support pdf input: {violated_models}"
 
 
-def test_supports_tool_choice_simple_tests():
+def test_supports_tool_choice_simple_tests(local_model_cost_map):
     """
     simple sanity checks
     """

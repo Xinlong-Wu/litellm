@@ -488,7 +488,13 @@ def setup_and_teardown():
     yield
 
     # Teardown - no need to manually manage event loops with pytest-asyncio auto mode
-    print(f"[conftest] Module teardown complete (worker: {worker_id or 'master'})")
+    # Function-scoped capture fixtures may close sys.stdout before this
+    # module-scoped teardown runs.  The diagnostic must never turn a passing
+    # test into a teardown error in that case.
+    try:
+        print(f"[conftest] Module teardown complete (worker: {worker_id or 'master'})")
+    except (OSError, ValueError):
+        pass
 
 
 def pytest_collection_modifyitems(config, items):
