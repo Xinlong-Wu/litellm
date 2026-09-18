@@ -85,7 +85,9 @@ def test_cors_exposes_cache_key_header_to_browser_js():
     from litellm.constants import LITELLM_UI_ALLOW_HEADERS
 
     cors_middleware = next(m for m in app.user_middleware if m.cls is CORSMiddleware)
-    assert cors_middleware.kwargs["expose_headers"] is LITELLM_UI_ALLOW_HEADERS
+    # Module reloads in the shared test fixture can create a fresh constants
+    # module; compare the configured header values rather than object identity.
+    assert cors_middleware.kwargs["expose_headers"] == LITELLM_UI_ALLOW_HEADERS
     assert "x-litellm-cache-key" in cors_middleware.kwargs["expose_headers"]
 
 
