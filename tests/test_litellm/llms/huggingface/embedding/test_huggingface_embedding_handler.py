@@ -6,6 +6,7 @@ from unittest.mock import patch, MagicMock, AsyncMock
 
 import litellm
 import pytest
+import respx
 
 
 MOCK_EMBEDDING_RESPONSE = [[0.1, 0.2, 0.3, 0.4, 0.5]]
@@ -47,6 +48,16 @@ def mock_embedding_http_handler(reload_huggingface_modules):
 
 
 @pytest.fixture
+def mock_hf_config_fetch():
+    """Serve the Hugging Face config.json fetched during cost calculation, so no test leaves the process"""
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.get(url__regex=r"https://huggingface\.co/.*/config\.json").respond(
+            json={"max_position_embeddings": 512}
+        )
+        yield respx_mock
+
+
+@pytest.fixture
 def mock_embedding_async_http_handler(reload_huggingface_modules):
     """Fixture to mock the async HTTP handler for embedding tests"""
     with patch(
@@ -64,8 +75,10 @@ def mock_embedding_async_http_handler(reload_huggingface_modules):
 
 class TestHuggingFaceEmbedding:
     @pytest.fixture(autouse=True)
-    def setup(self, mock_embedding_http_handler, mock_embedding_async_http_handler):
-        self.mock_get_task_patcher = patch("litellm.llms.huggingface.embedding.handler.get_hf_task_embedding_for_model")
+    def setup(self, mock_embedding_http_handler, mock_embedding_async_http_handler, mock_hf_config_fetch):
+        self.mock_get_task_patcher = patch(
+            "litellm.llms.huggingface.embedding.handler.get_hf_task_embedding_for_model"
+        )
         self.mock_get_task = self.mock_get_task_patcher.start()
 
         def mock_get_task_side_effect(model, task_type, api_base):

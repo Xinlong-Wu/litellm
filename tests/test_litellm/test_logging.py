@@ -14,16 +14,21 @@ import pytest
 
 import litellm
 from litellm._logging import (
+    _COLOR_LOG_FORMAT,
+    _PLAIN_LOG_FORMAT,
     ALL_LOGGERS,
     CorrelationContextFilter,
     CorrelationPlainFormatter,
     JsonFormatter,
+    LevelRoutingStreamHandler,
     SecretRedactionFilter,
     StdoutLogTruncationFilter,
     _SharedRotatingFileHandler,
     _get_app_file_handler,
     _get_uvicorn_log_config,
     _initialize_loggers_with_handler,
+    _parse_json_logs_env,
+    _plain_log_format,
     _lockfile_for,
     _reattach_app_file_handler,
     _stdout_truncation_marker,
@@ -66,11 +71,10 @@ def test_json_mode_emits_one_record_per_logger(capfd):
     verbose_router_logger.info("second info from router")
     verbose_proxy_logger.info("third info from proxy")
 
-    # Capture stdout
+    # All three records are INFO, so they must route to stdout and none to stderr
     out, err = capfd.readouterr()
-    print("out", out)
-    print("err", err)
-    lines = [l for l in err.splitlines() if l.strip()]
+    assert [raw for raw in err.splitlines() if raw.strip()] == []
+    lines = [raw for raw in out.splitlines() if raw.strip()]
 
     # Expect exactly three JSON lines
     assert len(lines) == 3, f"got {len(lines)} lines, want 3: {lines!r}"
@@ -841,6 +845,138 @@ def test_set_session_id_bounds_length():
     finally:
         session_id_var.reset(token)
 
+
+class _FakeStream:
+    def __init__(self, tty: bool) -> None:
+        self._tty = tty
+
+    def isatty(self) -> bool:
+        return self._tty
+
+
+def test_records_below_warning_go_to_stdout_and_the_rest_to_stderr(capsys):
+    logger = logging.getLogger("test_level_routing")
+    logger.handlers.clear()
+    logger.propagate = False
+    logger.setLevel(logging.DEBUG)
+    handler = LevelRoutingStreamHandler()
+    handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+    logger.addHandler(handler)
+
+    try:
+        logger.debug("d")
+        logger.info("i")
+        logger.warning("w")
+        logger.error("e")
+        logger.critical("c")
+    finally:
+        logger.handlers.clear()
+
+    out, err = capsys.readouterr()
+    assert out.splitlines() == ["DEBUG d", "INFO i"]
+    assert err.splitlines() == ["WARNING w", "ERROR e", "CRITICAL c"]
+
+
+def test_verbose_loggers_route_records_by_level():
+    for lg in (verbose_logger, verbose_router_logger, verbose_proxy_logger):
+        assert any(isinstance(h, LevelRoutingStreamHandler) for h in lg.handlers), lg.name
+
+
+@pytest.mark.parametrize(
+    "stdout_tty, stderr_tty, no_color, want_color",
+    [
+        (True, True, None, True),
+        (False, False, None, False),
+        (False, True, None, False),
+        (True, False, None, False),
+        (True, True, "1", False),
+        (True, True, "", True),
+    ],
+)
+def test_plain_log_format_colorizes_only_for_a_terminal(monkeypatch, stdout_tty, stderr_tty, no_color, want_color):
+    if no_color is None:
+        monkeypatch.delenv("NO_COLOR", raising=False)
+    else:
+        monkeypatch.setenv("NO_COLOR", no_color)
+
+    fmt = _plain_log_format(_FakeStream(stdout_tty), _FakeStream(stderr_tty))
+
+    assert fmt == (_COLOR_LOG_FORMAT if want_color else _PLAIN_LOG_FORMAT)
+    assert ("\033[" in fmt) is want_color
+
+
+def test_plain_format_carries_no_ansi_codes():
+    assert "\033[" not in _PLAIN_LOG_FORMAT
+
+
+class _Brokenstream:
+    """A write-only shim without isatty, like GUI log redirectors install."""
+
+
+class _ClosedStream:
+    closed = True
+
+    def isatty(self) -> bool:
+        raise ValueError("I/O operation on closed file")
+
+
+@pytest.mark.parametrize(
+    "stdout, stderr",
+    [
+        (None, None),
+        (_FakeStream(True), None),
+        (_Brokenstream(), _FakeStream(True)),
+        (_ClosedStream(), _FakeStream(True)),
+    ],
+)
+def test_plain_log_format_survives_hostile_streams(stdout, stderr):
+    """sys.stdout/sys.stderr can be None, shimmed, or closed; import must not crash."""
+    assert _plain_log_format(stdout, stderr) == _PLAIN_LOG_FORMAT
+
+
+def test_level_routing_handler_falls_back_to_stderr_when_stdout_is_unusable(monkeypatch, capsys):
+    logger = logging.getLogger("test_level_routing_fallback")
+    logger.handlers.clear()
+    logger.propagate = False
+    logger.setLevel(logging.DEBUG)
+    handler = LevelRoutingStreamHandler()
+    handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+    logger.addHandler(handler)
+
+    try:
+        monkeypatch.setattr(sys, "stdout", None)
+        logger.info("stdout is gone")
+    finally:
+        logger.handlers.clear()
+
+    err = capsys.readouterr().err
+    assert "INFO stdout is gone" in err
+    assert "--- Logging error ---" not in err
+
+
+@pytest.mark.parametrize(
+    "value, want",
+    [
+        ("true", True),
+        ("True", True),
+        ("TRUE", True),
+        ("false", False),
+        ("False", False),
+        ("0", False),
+        ("1", False),
+        ("", False),
+        (None, False),
+    ],
+)
+def test_parse_json_logs_env_enables_only_on_true(value, want):
+    """JSON_LOGS=false / 0 must not enable JSON logs (LIT-5558)."""
+    assert _parse_json_logs_env(value) is want
+
+
+def test_plain_log_format_survives_none_streams():
+    """sys.stdout/sys.stderr can be None in embedded interpreters; import must not crash."""
+    assert _plain_log_format(None, None) == _PLAIN_LOG_FORMAT
+    assert _plain_log_format(_FakeStream(True), None) == _PLAIN_LOG_FORMAT
 
 # ---------------------------------------------------------------------------
 # File logging: write logs to a directory (daily rotation)
