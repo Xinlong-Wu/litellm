@@ -1,0 +1,135 @@
+name: Build LiteLLM Docker Image
+
+on:
+  workflow_call:
+    inputs:
+      upstream_tag:
+        description: "Upstream LiteLLM release tag to use as the image version tag."
+        required: true
+        type: string
+      ref:
+        description: "Repository ref to build from."
+        required: true
+        type: string
+      force_rebuild:
+        description: "Rebuild and push even if the GHCR tag already exists."
+        required: false
+        default: false
+        type: boolean
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: "Upstream LiteLLM release tag to use as the image version tag."
+        required: true
+        type: string
+      ref:
+        description: "Repository ref to build from."
+        required: false
+        default: "litellm_internal_staging"
+        type: string
+      force_rebuild:
+        description: "Rebuild and push even if the GHCR tag already exists."
+        required: false
+        default: false
+        type: boolean
+
+permissions: {}
+
+env:
+  IMAGE_NAME: litellm-all-in-one
+
+jobs:
+  build-image:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Validate image tag
+        env:
+          TAG: ${{ inputs.upstream_tag }}
+        run: |
+          if ! echo "${TAG}" | grep -qE '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$'; then
+            echo "::error::Image tag '${TAG}' is not a valid Docker tag"
+            exit 1
+          fi
+
+      - name: Checkout build ref
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Resolve build metadata
+        id: metadata
+        run: |
+          owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          image="ghcr.io/${owner}/${IMAGE_NAME}"
+          revision="$(git rev-parse HEAD)"
+
+          echo "image=${image}" >> "${GITHUB_OUTPUT}"
+          echo "revision=${revision}" >> "${GITHUB_OUTPUT}"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check existing image
+        id: existing
+        env:
+          FORCE_REBUILD: ${{ inputs.force_rebuild }}
+          IMAGE: ${{ steps.metadata.outputs.image }}
+          TAG: ${{ inputs.upstream_tag }}
+        run: |
+          if [ "${FORCE_REBUILD}" != "true" ] && docker manifest inspect "${IMAGE}:${TAG}" >/dev/null 2>&1; then
+            echo "exists=true" >> "${GITHUB_OUTPUT}"
+            echo "Image ${IMAGE}:${TAG} already exists; skipping build."
+          else
+            echo "exists=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Free up disk space
+        if: steps.existing.outputs.exists != 'true'
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost
+          sudo apt-get clean
+          df -h /
+
+      - name: Build Admin UI
+        if: steps.existing.outputs.exists != 'true'
+        run: bash docker/build_admin_ui.sh
+
+      - name: Set up QEMU
+        if: steps.existing.outputs.exists != 'true'
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: amd64,arm64
+
+      - name: Set up Docker Buildx
+        if: steps.existing.outputs.exists != 'true'
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and push Docker image
+        if: steps.existing.outputs.exists != 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          target: runtime
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ steps.metadata.outputs.image }}:${{ inputs.upstream_tag }}
+            ${{ steps.metadata.outputs.image }}:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.metadata.outputs.revision }}
+            org.opencontainers.image.version=${{ inputs.upstream_tag }}
+          cache-from: type=gha,scope=${{ inputs.ref }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.ref }},ignore-error=true
