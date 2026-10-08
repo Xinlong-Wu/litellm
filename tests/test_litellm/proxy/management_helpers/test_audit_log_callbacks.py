@@ -324,6 +324,7 @@ class TestS3LoggerAuditLogEvent:
             logger.s3_path = "my-prefix"
             logger.log_queue = []
             logger.batch_size = 100
+            logger.max_queue_size = 100
 
             audit_log = StandardAuditLogPayload(
                 id="audit-123",
@@ -357,6 +358,7 @@ class TestS3LoggerAuditLogEvent:
             logger.s3_path = None
             logger.log_queue = []
             logger.batch_size = 100
+            logger.max_queue_size = 100
 
             audit_log = StandardAuditLogPayload(
                 id="audit-456",

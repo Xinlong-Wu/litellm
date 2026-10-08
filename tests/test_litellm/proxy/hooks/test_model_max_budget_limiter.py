@@ -1,325 +1,198 @@
-"""
-Unit tests for per-model-group dollar budgets in
-``_PROXY_VirtualKeyModelMaxBudgetLimiter``.
-
-A "model group" here is an access group: a named set of models whose combined
-dollar spend is capped by one budget. These tests pin three behaviors that
-would silently regress if spend were tracked per-model or per-key instead of
-per-group/per-scope:
-
-  * group aggregation - spend on every model in the group accrues to one cap
-  * user aggregation across keys - the counter is keyed on user_id, so two
-    different virtual keys for the same user share one budget
-  * team-member scope - spend is keyed on (user_id, team_id)
-"""
+import asyncio
+import time
+from collections.abc import Callable, Mapping
+from types import MappingProxyType
+from typing import Final
 
 import pytest
 
 from litellm.caching.caching import DualCache
-from litellm.exceptions import (
-    BudgetExceededError,
-    RateLimitError,
-    RateLimitType,
-)
 from litellm.proxy.hooks.model_max_budget_limiter import (
-    TEAM_MEMBER_GROUP_RATE_CACHE_KEY_PREFIX,
-    USER_GROUP_RATE_CACHE_KEY_PREFIX,
-    USER_GROUP_SPEND_CACHE_KEY_PREFIX,
     _PROXY_VirtualKeyModelMaxBudgetLimiter,
 )
+from litellm.types.caching import RedisPipelineIncrementOperation
+from litellm.types.utils import LiteLLMBatch, Usage
 
-GROUP_BUDGET = {"premium": {"max_budget": 0.02, "budget_duration": "30d"}}
-GROUP_RPM = {"premium": {"rpm_limit": 2}}
-GROUP_TPM = {"premium": {"tpm_limit": 100}}
+KEY_HASH: Final = "key-hash-batch"
+USER_ID: Final = "user-batch"
+MODEL_GROUP: Final = "batch-qa-primary"
+BATCH_COST: Final = 2.925e-05
+CHAT_COST: Final = 0.001
+KEY_SPEND_KEY: Final = f"virtual_key_spend:{KEY_HASH}:{MODEL_GROUP}:1d"
+USER_SPEND_KEY: Final = f"user_model_spend:{USER_ID}:{MODEL_GROUP}:1d"
 
 
-def _make_limiter() -> _PROXY_VirtualKeyModelMaxBudgetLimiter:
-    return _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+def _batch(batch_id: str, status: str) -> LiteLLMBatch:
+    return LiteLLMBatch(
+        id=batch_id,
+        completion_window="24h",
+        created_at=1,
+        endpoint="/v1/chat/completions",
+        input_file_id="file-batch",
+        object="batch",
+        status=status,
+        usage=Usage(prompt_tokens=20, completion_tokens=18, total_tokens=38),
+    )
+
+
+def _event(call_type: str, response_cost: float) -> dict[str, object]:
+    return {
+        "call_type": call_type,
+        "standard_logging_object": {
+            "call_type": call_type,
+            "response_cost": response_cost,
+            "model": "openai/gpt-5.4-mini",
+            "model_group": MODEL_GROUP,
+            "metadata": {"user_api_key_hash": KEY_HASH, "user_api_key_user_id": USER_ID},
+        },
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_model_max_budget": {MODEL_GROUP: {"budget_limit": 0.0001, "time_period": "1d"}},
+                "user_api_key_user_model_max_budget": {MODEL_GROUP: {"budget_limit": 0.0001, "time_period": "1d"}},
+            }
+        },
+    }
+
+
+async def _poll(limiter: _PROXY_VirtualKeyModelMaxBudgetLimiter, batch: LiteLLMBatch, response_cost: float) -> None:
+    await limiter.async_log_success_event(
+        _event("aretrieve_batch", response_cost), response_obj=batch, start_time=None, end_time=None
+    )
+
+
+async def _chat(limiter: _PROXY_VirtualKeyModelMaxBudgetLimiter) -> None:
+    await limiter.async_log_success_event(
+        _event("acompletion", CHAT_COST), response_obj=None, start_time=None, end_time=None
+    )
+
+
+async def _spend(limiter: _PROXY_VirtualKeyModelMaxBudgetLimiter, spend_key: str) -> float:
+    return await limiter.dual_cache.async_get_cache(key=spend_key) or 0.0
+
+
+def _local_spend(limiter: _PROXY_VirtualKeyModelMaxBudgetLimiter, spend_key: str) -> float:
+    return limiter.dual_cache.in_memory_cache.get_cache(key=spend_key) or 0.0
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.seconds = 0.0
+
+    def now(self) -> float:
+        return self.seconds
+
+    def advance(self, seconds: float) -> None:
+        self.seconds = self.seconds + seconds
+
+
+class _SharedRedisDouble:
+    def __init__(self, now: Callable[[], float] = time.time) -> None:
+        self.now = now
+        self.entries: Mapping[str, tuple[float, float | None]] = MappingProxyType({})
+
+    def _live(self, key: str) -> tuple[float, float | None] | None:
+        entry: Final = self.entries.get(key)
+        if entry is None:
+            return None
+        expires_at: Final = entry[1]
+        if expires_at is not None and expires_at <= self.now():
+            return None
+        return entry
+
+    def _store(self, key: str, value: float, expires_at: float | None) -> None:
+        self.entries = MappingProxyType({**self.entries, key: (value, expires_at)})
+
+    async def async_get_cache(self, key: str, **kwargs: object) -> float | None:
+        await asyncio.sleep(0)
+        entry: Final = self._live(key)
+        return None if entry is None else entry[0]
+
+    async def async_set_cache(self, key: str, value: float, ttl: int | None = None, **kwargs: object) -> None:
+        await asyncio.sleep(0)
+        self._store(key, value, None if ttl is None else self.now() + ttl)
+
+    async def async_increment(
+        self,
+        key: str,
+        value: float,
+        ttl: int | None = None,
+        parent_otel_span: object = None,
+        refresh_ttl: bool = False,
+    ) -> float:
+        await asyncio.sleep(0)
+        live: Final = self._live(key)
+        total: Final = value if live is None else live[0] + value
+        kept_expiry: Final = None if live is None else live[1]
+        expires_at: Final = (
+            kept_expiry if ttl is None or (kept_expiry is not None and not refresh_ttl) else self.now() + ttl
+        )
+        self._store(key, total, expires_at)
+        return total
+
+    async def async_increment_pipeline(self, increment_list: list[RedisPipelineIncrementOperation]) -> list[float]:
+        return [await self.async_increment(op["key"], op["increment_value"], ttl=op["ttl"]) for op in increment_list]
+
+
+def _worker(redis: _SharedRedisDouble) -> _PROXY_VirtualKeyModelMaxBudgetLimiter:
+    return _PROXY_VirtualKeyModelMaxBudgetLimiter(
+        dual_cache=DualCache(redis_cache=redis)  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    )
+
+
+async def _drain_redis_pushes() -> None:
+    await asyncio.gather(*(task for task in asyncio.all_tasks() if task is not asyncio.current_task()))
 
 
 @pytest.mark.asyncio
-async def test_user_within_group_budget_passes_when_under_cap():
-    limiter = _make_limiter()
-    await limiter._increment_model_group_spend(
-        scope_prefix=USER_GROUP_SPEND_CACHE_KEY_PREFIX,
-        scope_id="user-1",
-        model_group_max_budget=GROUP_BUDGET,
-        groups=["premium"],
-        response_cost=0.005,
-    )
+async def test_polls_of_a_finished_batch_charge_each_per_model_budget_once():
+    limiter: Final = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    first: Final = _batch("batch_first", "completed")
 
-    assert (
-        await limiter.is_user_within_model_group_budget(
-            user_id="user-1",
-            user_model_group_max_budget=GROUP_BUDGET,
-            groups=["premium"],
-        )
-        is True
-    )
+    await _poll(limiter, _batch("batch_first", "in_progress"), response_cost=0)
+    for _ in range(3):
+        await _poll(limiter, first, response_cost=BATCH_COST)
+
+    assert await _spend(limiter, KEY_SPEND_KEY) == pytest.approx(BATCH_COST)
+    assert await _spend(limiter, USER_SPEND_KEY) == pytest.approx(BATCH_COST)
 
 
 @pytest.mark.asyncio
-async def test_user_group_budget_sums_across_models_in_group():
-    """Two different models in the same group accrue to one cap."""
-    limiter = _make_limiter()
-    # model A request
-    await limiter._increment_model_group_spend(
-        scope_prefix=USER_GROUP_SPEND_CACHE_KEY_PREFIX,
-        scope_id="user-1",
-        model_group_max_budget=GROUP_BUDGET,
-        groups=["premium"],
-        response_cost=0.012,
-    )
-    # model B request (also resolves to the "premium" group)
-    await limiter._increment_model_group_spend(
-        scope_prefix=USER_GROUP_SPEND_CACHE_KEY_PREFIX,
-        scope_id="user-1",
-        model_group_max_budget=GROUP_BUDGET,
-        groups=["premium"],
-        response_cost=0.012,
-    )
+async def test_a_second_batch_and_chat_requests_still_charge_the_budget():
+    limiter: Final = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
 
-    with pytest.raises(BudgetExceededError):
-        await limiter.is_user_within_model_group_budget(
-            user_id="user-1",
-            user_model_group_max_budget=GROUP_BUDGET,
-            groups=["premium"],
-        )
+    await _poll(limiter, _batch("batch_first", "completed"), response_cost=BATCH_COST)
+    await _poll(limiter, _batch("batch_first", "completed"), response_cost=BATCH_COST)
+    await _poll(limiter, _batch("batch_second", "completed"), response_cost=BATCH_COST)
+    await _chat(limiter)
+    await _chat(limiter)
+
+    assert await _spend(limiter, KEY_SPEND_KEY) == pytest.approx(2 * BATCH_COST + 2 * CHAT_COST)
 
 
 @pytest.mark.asyncio
-async def test_user_group_budget_aggregates_across_keys():
-    """Spend from two virtual keys for the same user shares one counter.
+async def test_two_workers_polling_the_same_finished_batch_at_once_charge_it_once():
+    redis: Final = _SharedRedisDouble()
+    worker_a: Final = _worker(redis)
+    worker_b: Final = _worker(redis)
+    finished: Final = _batch("batch_first", "completed")
 
-    The increment helper is key-agnostic - it is scoped by user_id - so the two
-    requests below stand in for two different virtual keys. A per-key
-    implementation would leave each key at 0.012 (under 0.02) and never trip.
-    """
-    limiter = _make_limiter()
-    for _ in range(2):
-        await limiter._increment_model_group_spend(
-            scope_prefix=USER_GROUP_SPEND_CACHE_KEY_PREFIX,
-            scope_id="user-1",
-            model_group_max_budget=GROUP_BUDGET,
-            groups=["premium"],
-            response_cost=0.012,
-        )
+    await asyncio.gather(_poll(worker_a, finished, BATCH_COST), _poll(worker_b, finished, BATCH_COST))
+    await _drain_redis_pushes()
 
-    with pytest.raises(BudgetExceededError) as exc:
-        await limiter.is_user_within_model_group_budget(
-            user_id="user-1",
-            user_model_group_max_budget=GROUP_BUDGET,
-            groups=["premium"],
-        )
-    assert exc.value.current_cost == pytest.approx(0.024)
+    assert _local_spend(worker_a, KEY_SPEND_KEY) + _local_spend(worker_b, KEY_SPEND_KEY) == pytest.approx(BATCH_COST)
+    assert await redis.async_get_cache(KEY_SPEND_KEY) == pytest.approx(BATCH_COST)
 
 
 @pytest.mark.asyncio
-async def test_user_group_budget_isolated_per_user():
-    limiter = _make_limiter()
-    await limiter._increment_model_group_spend(
-        scope_prefix=USER_GROUP_SPEND_CACHE_KEY_PREFIX,
-        scope_id="user-1",
-        model_group_max_budget=GROUP_BUDGET,
-        groups=["premium"],
-        response_cost=0.05,
-    )
+async def test_a_batch_polled_within_every_budget_window_is_never_charged_again():
+    clock: Final = _Clock()
+    limiter: Final = _worker(_SharedRedisDouble(now=clock.now))
+    finished: Final = _batch("batch_first", "completed")
 
-    # user-2 has spent nothing, so they are unaffected by user-1's overage
-    assert (
-        await limiter.is_user_within_model_group_budget(
-            user_id="user-2",
-            user_model_group_max_budget=GROUP_BUDGET,
-            groups=["premium"],
-        )
-        is True
-    )
+    await _poll(limiter, finished, BATCH_COST)
+    clock.advance(12 * 3600)
+    await _poll(limiter, finished, BATCH_COST)
+    clock.advance(18 * 3600)
+    await _poll(limiter, finished, BATCH_COST)
 
-
-@pytest.mark.asyncio
-async def test_group_with_no_budget_is_not_enforced():
-    limiter = _make_limiter()
-    # requested model resolves to a group that has no configured budget
-    assert (
-        await limiter.is_user_within_model_group_budget(
-            user_id="user-1",
-            user_model_group_max_budget=GROUP_BUDGET,
-            groups=["unbudgeted-group"],
-        )
-        is True
-    )
-
-
-@pytest.mark.asyncio
-async def test_team_member_group_budget_keyed_on_user_and_team():
-    limiter = _make_limiter()
-    await limiter._increment_model_group_spend(
-        scope_prefix="team_member_model_group_spend",
-        scope_id="user-1:team-1",
-        model_group_max_budget=GROUP_BUDGET,
-        groups=["premium"],
-        response_cost=0.03,
-    )
-
-    with pytest.raises(BudgetExceededError) as exc:
-        await limiter.is_team_member_within_model_group_budget(
-            user_id="user-1",
-            team_id="team-1",
-            team_member_model_group_max_budget=GROUP_BUDGET,
-            groups=["premium"],
-        )
-    assert "Team=team-1" in str(exc.value)
-
-    # same user in a different team is unaffected
-    assert (
-        await limiter.is_team_member_within_model_group_budget(
-            user_id="user-1",
-            team_id="team-2",
-            team_member_model_group_max_budget=GROUP_BUDGET,
-            groups=["premium"],
-        )
-        is True
-    )
-
-
-@pytest.mark.asyncio
-async def test_user_group_rpm_limit_blocks_after_cap():
-    """rpm_limit rides in the same model_group_max_budget map and caps requests/min."""
-    limiter = _make_limiter()
-    # one request under the cap of 2 still passes
-    await limiter._increment_model_group_rate(
-        scope_prefix=USER_GROUP_RATE_CACHE_KEY_PREFIX,
-        scope_id="user-1",
-        model_group_max_budget=GROUP_RPM,
-        groups=["premium"],
-        total_tokens=10,
-    )
-    assert (
-        await limiter.is_user_within_model_group_budget(
-            user_id="user-1",
-            user_model_group_max_budget=GROUP_RPM,
-            groups=["premium"],
-        )
-        is True
-    )
-
-    # a second request hits the cap
-    await limiter._increment_model_group_rate(
-        scope_prefix=USER_GROUP_RATE_CACHE_KEY_PREFIX,
-        scope_id="user-1",
-        model_group_max_budget=GROUP_RPM,
-        groups=["premium"],
-        total_tokens=10,
-    )
-    with pytest.raises(RateLimitError) as exc:
-        await limiter.is_user_within_model_group_budget(
-            user_id="user-1",
-            user_model_group_max_budget=GROUP_RPM,
-            groups=["premium"],
-        )
-    assert exc.value.rate_limit_type == RateLimitType.REQUESTS.value
-    assert "model group=premium" in str(exc.value)
-
-
-@pytest.mark.asyncio
-async def test_user_group_tpm_limit_blocks_when_tokens_exceed():
-    """tpm_limit caps summed tokens/min across the group, not request count."""
-    limiter = _make_limiter()
-    # a single request of 100 tokens reaches the tpm cap of 100
-    await limiter._increment_model_group_rate(
-        scope_prefix=USER_GROUP_RATE_CACHE_KEY_PREFIX,
-        scope_id="user-1",
-        model_group_max_budget=GROUP_TPM,
-        groups=["premium"],
-        total_tokens=100,
-    )
-    with pytest.raises(RateLimitError) as exc:
-        await limiter.is_user_within_model_group_budget(
-            user_id="user-1",
-            user_model_group_max_budget=GROUP_TPM,
-            groups=["premium"],
-        )
-    assert exc.value.rate_limit_type == RateLimitType.TOKENS.value
-
-    # a different user with no token spend is unaffected
-    assert (
-        await limiter.is_user_within_model_group_budget(
-            user_id="user-2",
-            user_model_group_max_budget=GROUP_TPM,
-            groups=["premium"],
-        )
-        is True
-    )
-
-
-@pytest.mark.asyncio
-async def test_rate_only_group_enforced_without_max_budget():
-    """A group carrying only a rate limit (no max_budget) is still enforced.
-
-    Guards the ``_group_rate_config`` relaxation: ``_group_budget_config`` requires
-    ``max_budget > 0``, so if rate enforcement reused it, rate-only groups would
-    silently never trip.
-    """
-    limiter = _make_limiter()
-    for _ in range(2):
-        await limiter._increment_model_group_rate(
-            scope_prefix=USER_GROUP_RATE_CACHE_KEY_PREFIX,
-            scope_id="user-1",
-            model_group_max_budget=GROUP_RPM,
-            groups=["premium"],
-            total_tokens=1,
-        )
-
-    with pytest.raises(RateLimitError):
-        await limiter.is_user_within_model_group_budget(
-            user_id="user-1",
-            user_model_group_max_budget=GROUP_RPM,
-            groups=["premium"],
-        )
-
-
-@pytest.mark.asyncio
-async def test_user_and_team_member_rate_counters_isolated():
-    """User-scope and team-member-scope rate counters use distinct cache keys."""
-    limiter = _make_limiter()
-    for _ in range(2):
-        await limiter._increment_model_group_rate(
-            scope_prefix=USER_GROUP_RATE_CACHE_KEY_PREFIX,
-            scope_id="user-1",
-            model_group_max_budget=GROUP_RPM,
-            groups=["premium"],
-            total_tokens=1,
-        )
-
-    # the team-member scope for the same user has its own counter at 0
-    assert (
-        await limiter.is_team_member_within_model_group_budget(
-            user_id="user-1",
-            team_id="team-1",
-            team_member_model_group_max_budget=GROUP_RPM,
-            groups=["premium"],
-        )
-        is True
-    )
-
-    await limiter._increment_model_group_rate(
-        scope_prefix=TEAM_MEMBER_GROUP_RATE_CACHE_KEY_PREFIX,
-        scope_id="user-1:team-1",
-        model_group_max_budget=GROUP_RPM,
-        groups=["premium"],
-        total_tokens=1,
-    )
-    await limiter._increment_model_group_rate(
-        scope_prefix=TEAM_MEMBER_GROUP_RATE_CACHE_KEY_PREFIX,
-        scope_id="user-1:team-1",
-        model_group_max_budget=GROUP_RPM,
-        groups=["premium"],
-        total_tokens=1,
-    )
-    with pytest.raises(RateLimitError):
-        await limiter.is_team_member_within_model_group_budget(
-            user_id="user-1",
-            team_id="team-1",
-            team_member_model_group_max_budget=GROUP_RPM,
-            groups=["premium"],
-        )
+    assert _local_spend(limiter, KEY_SPEND_KEY) == pytest.approx(BATCH_COST)

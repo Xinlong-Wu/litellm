@@ -23,7 +23,8 @@ MGMT_MODULE = "litellm.proxy.management_endpoints.mcp_management_endpoints"
 @contextlib.contextmanager
 def _env_and_reload(**env):
     saved = {key: os.environ.get(key) for key in env}
-
+    utils_module = importlib.import_module(UTILS_MODULE)
+    mgmt_module = importlib.import_module(MGMT_MODULE)
     # Snapshot the modules' attributes so they can be restored to their ORIGINAL
     # class objects afterwards. Reloading to "undo" would mint brand-new classes
     # (e.g. MCPMissingUserEnvVarsError) that diverge from the references frozen

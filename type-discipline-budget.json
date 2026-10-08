@@ -1,38 +1,44 @@
 {
   "LIT001": {
-    "limit": 22586
+    "limit": 21492
   },
   "LIT002": {
-    "limit": 26846
+    "limit": 26441
   },
   "LIT003": {
-    "limit": 269
+    "limit": 257
   },
   "LIT004": {
-    "limit": 43
+    "limit": 33
   },
   "LIT005": {
     "limit": 0
   },
   "LIT006": {
-    "limit": 1056
+    "limit": 1007
   },
   "LIT007": {
     "limit": 0
   },
   "LIT008": {
-    "limit": 940
+    "limit": 909
   },
   "LIT009": {
     "limit": 0
   },
   "LIT010": {
-    "limit": 16472
+    "limit": 15806
   },
   "LIT011": {
-    "limit": 5562
+    "limit": 5350
   },
   "LIT012": {
-    "limit": 4495
+    "limit": 4435
+  },
+  "LIT013": {
+    "limit": 0
+  },
+  "LIT014": {
+    "limit": 373
   }
 }
