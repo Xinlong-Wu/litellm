@@ -33,7 +33,7 @@ async def test_beat_upserts_own_row_then_prunes_stale_rows():
 
 
 @pytest.mark.asyncio
-async def test_beat_survives_a_database_error():
+async def test_beat_survives_a_database_error():  # test-quality-ok: non-raising heartbeat DB-failure contract
     prisma = _prisma()
     prisma.db.execute_raw = AsyncMock(side_effect=RuntimeError("db down"))
     await ProxyWorkerHeartbeat(prisma_client=prisma).beat()
@@ -54,7 +54,7 @@ async def test_deregister_deletes_only_its_own_row():
 
 
 @pytest.mark.asyncio
-async def test_deregister_survives_a_database_error():
+async def test_deregister_survives_a_database_error():  # test-quality-ok: non-raising deregister DB-failure contract
     prisma = _prisma()
     prisma.db.execute_raw = AsyncMock(side_effect=RuntimeError("db down"))
     await ProxyWorkerHeartbeat(prisma_client=prisma, worker_id="worker-1").deregister()

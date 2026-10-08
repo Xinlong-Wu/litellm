@@ -28,7 +28,7 @@ from prisma.errors import (
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import INVALID_VIRTUAL_KEY_ERROR_MARKER
-from litellm.exceptions import BudgetExceededError
+from litellm.exceptions import BudgetExceededError, RateLimitError
 from litellm.proxy._types import (
     ModelAccessDeniedProxyException,
     ProxyErrorTypes,
@@ -215,22 +215,12 @@ async def test_handle_authentication_error_transient_outage_503_keeps_retry_word
     "prisma_error",
     [
         DataError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
-        UniqueViolationError(
-            data={"user_facing_error": {"meta": {"table": "test_table"}}}
-        ),
-        ForeignKeyViolationError(
-            data={"user_facing_error": {"meta": {"table": "test_table"}}}
-        ),
-        MissingRequiredValueError(
-            data={"user_facing_error": {"meta": {"table": "test_table"}}}
-        ),
+        UniqueViolationError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
+        ForeignKeyViolationError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
+        MissingRequiredValueError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
         RawQueryError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
-        TableNotFoundError(
-            data={"user_facing_error": {"meta": {"table": "test_table"}}}
-        ),
-        RecordNotFoundError(
-            data={"user_facing_error": {"meta": {"table": "test_table"}}}
-        ),
+        TableNotFoundError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
+        RecordNotFoundError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
     ],
 )
 async def test_handle_authentication_error_data_layer_errors_do_not_fall_back(
@@ -449,6 +439,29 @@ async def test_handle_authentication_error_budget_exceeded():
 
     assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
     assert int(exc_info.value.code) == status.HTTP_422_UNPROCESSABLE_CONTENT
+
+
+@pytest.mark.asyncio
+async def test_handle_authentication_error_rate_limit():
+    handler = UserAPIKeyAuthExceptionHandler()
+    rate_error = RateLimitError(
+        message="exceeded RPM limit for model group=premium",
+        llm_provider="litellm",
+        model="premium",
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await handler._handle_authentication_error(
+            rate_error,
+            MagicMock(),
+            {},
+            "/test",
+            None,
+            "test-key",
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.rate_limit_error
+    assert int(exc_info.value.code) == status.HTTP_429_TOO_MANY_REQUESTS
 
 
 @pytest.mark.asyncio

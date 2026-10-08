@@ -134,7 +134,6 @@ describe("(dashboard) Layout", () => {
 
   it("redirects an invitation link to the onboarding route instead of rendering the dashboard shell", async () => {
     searchParamsValue = new URLSearchParams("invitation_id=abc123");
-
     render(
       <AuthProvider>
         <Layout>
@@ -207,5 +206,20 @@ describe("(dashboard) Layout", () => {
       expect(await screen.findByTestId("page-content")).toBeInTheDocument();
       expect(replaceMock).not.toHaveBeenCalled();
     });
+  });
+
+  it("allows dashboard route content to shrink within the flex layout", async () => {
+    render(
+      <AuthProvider>
+        <Layout>
+          <div data-testid="page-content">Page content</div>
+        </Layout>
+      </AuthProvider>,
+    );
+
+    pendingUiConfig.resolve();
+
+    const pageContent = await screen.findByTestId("page-content");
+    expect(pageContent.closest("main")).toHaveClass("min-w-0");
   });
 });

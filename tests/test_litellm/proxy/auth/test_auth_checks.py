@@ -856,9 +856,9 @@ def test_get_cli_jwt_auth_token_default_expiration(valid_sso_user_defined_values
     assert token_data["user_id"] == "test_user"
     assert token_data["user_role"] == LitellmUserRoles.PROXY_ADMIN.value
     assert token_data["models"] == ["gpt-3.5-turbo"]
-    # CLI session tokens carry no per-key budget; spend is enforced via the
-    # shared team/user counters. The $0.25 UI session cap must not leak in.
-    assert token_data.get("max_budget") is None
+    # CLI session tokens inherit the configured UI session cap when callers do
+    # not explicitly choose a budget.
+    assert token_data.get("max_budget") == litellm.max_ui_session_budget
     # is_session_token=True causes key_management_endpoints to use the team
     # budget as the delegation ceiling instead of treating None as unlimited.
     assert token_data.get("is_session_token") is True
@@ -932,13 +932,13 @@ def test_get_cli_jwt_auth_token_applies_fallback_budget(valid_sso_user_defined_v
     assert json.loads(decrypted).get("max_budget") == litellm.max_ui_session_budget
 
 
-def test_get_cli_jwt_auth_token_no_fallback_when_budget_provided(
+def test_get_cli_jwt_auth_token_none_budget_uses_fallback(
     valid_sso_user_defined_values,
 ):
     token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values, max_budget=None)
     decrypted = decrypt_bearer_token(token, prefix=LITELLM_SESSION_TOKEN_PREFIX)
     assert decrypted is not None
-    assert json.loads(decrypted).get("max_budget") is None
+    assert json.loads(decrypted).get("max_budget") == litellm.max_ui_session_budget
 
 
 @pytest.mark.asyncio

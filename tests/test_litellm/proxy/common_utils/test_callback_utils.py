@@ -19,6 +19,7 @@ from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
     encrypt_callback_vars,
     get_logging_caching_headers,
+    get_model_group_from_litellm_kwargs,
     get_remaining_tokens_and_requests_from_request_data,
     initialize_callbacks_on_proxy,
     normalize_callback_names,
@@ -47,6 +48,41 @@ def test_get_remaining_tokens_and_requests_from_request_data():
         f"x-litellm-key-remaining-requests-{expected_name}": 100,
         f"x-litellm-key-remaining-tokens-{expected_name}": 200,
     }
+
+
+def test_get_remaining_tokens_and_requests_reads_litellm_metadata_first():
+    model_group = "responses/restricted-model"
+    provider_metadata = {"customer_id": "cust-123"}
+    request_data = {
+        "metadata": provider_metadata,
+        "litellm_metadata": {
+            "model_group": model_group,
+            f"litellm-key-remaining-requests-{model_group}": 9,
+            f"litellm-key-remaining-tokens-{model_group}": 95,
+        },
+    }
+
+    headers = get_remaining_tokens_and_requests_from_request_data(request_data)
+
+    assert headers == {
+        "x-litellm-key-remaining-requests-responses-restricted-model": 9,
+        "x-litellm-key-remaining-tokens-responses-restricted-model": 95,
+    }
+    assert request_data["metadata"] == provider_metadata
+
+
+def test_get_model_group_from_litellm_kwargs_prefers_internal_bucket():
+    assert (
+        get_model_group_from_litellm_kwargs(
+            {
+                "litellm_params": {
+                    "metadata": {"provider_field": "value"},
+                    "litellm_metadata": {"model_group": "restricted-model"},
+                }
+            }
+        )
+        == "restricted-model"
+    )
 
 
 @patch(
