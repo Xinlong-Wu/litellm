@@ -19,6 +19,7 @@ defaults to ``True`` so a config dict (raw, not Pydantic) without an
 ``auth`` key still requires authentication.
 """
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -62,6 +63,7 @@ async def test_register_passthrough_with_auth_true_works_for_oss(monkeypatch):
     # unless ``premium_user`` was True, leaving OSS with no safe
     # configuration.
     app = MagicMock(spec=FastAPI)
+    app.state = SimpleNamespace()
     visited: set = set()
 
     endpoint = PassThroughGenericEndpoint(

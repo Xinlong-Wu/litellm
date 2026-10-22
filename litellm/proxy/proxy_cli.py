@@ -977,7 +977,7 @@ class ProxyInitializationHelpers:
     envvar="LIMIT_CONCURRENCY",
 )
 @click.option(
-    "--enforce_prisma_migration_check",
+    "--enforce_prisma_migration_check/--no-enforce_prisma_migration_check",
     is_flag=True,
     default=False,
     hidden=True,

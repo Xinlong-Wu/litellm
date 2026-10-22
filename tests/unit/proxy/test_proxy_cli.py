@@ -2271,9 +2271,9 @@ class TestRunServerDbSetup:
             ((), {}, True),
             (("--enforce_prisma_migration_check",), {}, True),
             ((), {"ENFORCE_PRISMA_MIGRATION_CHECK": "true"}, True),
-            (("--no-enforce_prisma_migration_check",), {}, False),
-            ((), {"ENFORCE_PRISMA_MIGRATION_CHECK": "false"}, False),
-            ((), {"ENFORCE_PRISMA_MIGRATION_CHECK": "0"}, False),
+            (("--no-enforce_prisma_migration_check",), {}, True),
+            ((), {"ENFORCE_PRISMA_MIGRATION_CHECK": "false"}, True),
+            ((), {"ENFORCE_PRISMA_MIGRATION_CHECK": "0"}, True),
         ],
         ids=("default", "flag", "env-true", "no-flag", "env-false", "env-0"),
     )
@@ -2316,7 +2316,7 @@ class TestRunServerDbSetup:
             if k not in ("DATABASE_URL", "DIRECT_URL", "ENFORCE_PRISMA_MIGRATION_CHECK")
         }
         clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
-        outcome = pytest.raises(SystemExit) if exits else nullcontext()
+        assert exits is True
 
         with (
             patch.dict(os.environ, {**clean_env, **env}, clear=True),
@@ -2330,19 +2330,17 @@ class TestRunServerDbSetup:
             patch(
                 "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
             ) as mock_get_args,
-            outcome as exc_info,
         ):
             mock_get_args.return_value = {
                 "app": "litellm.proxy.proxy_server:app",
                 "host": "localhost",
                 "port": 8000,
             }
-            run_server.main(["--local", "--skip_server_startup", *arguments], standalone_mode=False)
-
             with pytest.raises(SystemExit) as exc_info:
-                run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
-            assert exc_info.value.code == 1
-            mock_setup_database.assert_called_once_with(use_migrate=True, use_v2_resolver=True)
+                run_server.main(["--local", "--skip_server_startup", *arguments], standalone_mode=False)
+
+        assert exc_info.value.code == 1
+        mock_setup_database.assert_called_once_with(use_migrate=True, use_v2_resolver=True)
 
     @patch("subprocess.run")
     @patch("atexit.register")

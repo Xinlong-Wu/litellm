@@ -337,6 +337,7 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
         "total_response_time_ms": 0,
         "timed_requests": 0,
         "failed_requests": 0,
+        "distinct_api_keys": None,
     }
     mock_rows = [
         # (date, endpoint) — rolls up across api_keys and models
@@ -1096,6 +1097,7 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
         "total_response_time_ms": 0,
         "timed_requests": 0,
         "failed_requests": 0,
+        "distinct_api_keys": None,
     }
     mock_rows = [
         {
@@ -1410,6 +1412,7 @@ async def test_get_daily_activity_aggregated_empty_result_set():
             "api_requests": None,
             "successful_requests": None,
             "failed_requests": None,
+            "distinct_api_keys": None,
         }
     ]
     mock_prisma.db.query_raw = AsyncMock(return_value=mock_rows)
@@ -2184,6 +2187,7 @@ async def test_get_daily_activity_aggregated_with_entity_breakdown():
         "completion_tokens": 0,
         "api_requests": 0,
         "successful_requests": 0,
+        "distinct_api_keys": None,
     }
     main_rows = [
         {**base, "date": None, "group_level": 127, "spend": 18.0},
