@@ -13,7 +13,7 @@ import re
 import secrets
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Any, Final, NamedTuple, Protocol, Union
+from typing import Any, Final, NamedTuple, Protocol, Union, cast
 
 import fastapi
 import orjson
@@ -1860,7 +1860,9 @@ async def _user_api_key_auth_builder(
                             ),
                         )
 
-                    return valid_token
+                    return cast(  # cast-ok: narrow the JWT branch before its early return
+                        UserAPIKeyAuth, valid_token
+                    )  # pyright: ignore[reportUnnecessaryCast]  # preserves the early-return type contract
 
         #### ELSE ####
         ## CHECK PASS-THROUGH ENDPOINTS ##

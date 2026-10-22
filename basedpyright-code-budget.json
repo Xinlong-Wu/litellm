@@ -84,7 +84,7 @@
     "limit": 56
   },
   "reportPrivateUsage": {
-    "limit": 1790
+    "limit": 1787
   },
   "reportRedeclaration": {
     "limit": 9
@@ -102,7 +102,7 @@
     "limit": 44802
   },
   "reportUnknownLambdaType": {
-    "limit": 108
+    "limit": 107
   },
   "reportUnknownMemberType": {
     "limit": 38269
@@ -117,7 +117,7 @@
     "limit": 101
   },
   "reportUnnecessaryComparison": {
-    "limit": 675
+    "limit": 671
   },
   "reportUnnecessaryContains": {
     "limit": 3
@@ -135,10 +135,10 @@
     "limit": 20
   },
   "reportUnusedFunction": {
-    "limit": 132
+    "limit": 131
   },
   "reportUnusedImport": {
-    "limit": 535
+    "limit": 528
   },
   "reportUnusedVariable": {
     "limit": 127

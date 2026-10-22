@@ -1,6 +1,6 @@
 {
   "TQ001": {
-    "limit": 711
+    "limit": 704
   },
   "TQ002": {
     "limit": 734
@@ -9,18 +9,18 @@
     "limit": 61
   },
   "TQ004": {
-    "limit": 440
+    "limit": 432
   },
   "TQ005": {
     "limit": 2336
   },
   "TQ006": {
-    "limit": 32
+    "limit": 31
   },
   "TQ007": {
     "limit": 117
   },
   "TQ009": {
-    "limit": 58
+    "limit": 57
   }
 }
