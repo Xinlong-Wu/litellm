@@ -15073,6 +15073,53 @@ async def test_server_response_identifies_read_only_config(in_config, in_db, exp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "flag,transports,expected_warnings",
+    [
+        (None, ["stdio", "stdio", "stdio"], 1),
+        (None, ["http", "stdio", "stdio"], 1),
+        ("true", ["stdio", "stdio", "stdio"], 0),
+    ],
+)
+async def test_reload_warns_once_about_a_blocked_stdio_row_that_is_rebuilt_every_time(
+    monkeypatch, caplog, flag, transports, expected_warnings
+):
+    if flag is None:
+        monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
+    else:
+        monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", flag)
+    manager = MCPServerManager()
+    repository = MagicMock()
+
+    async def build_from_table(table, **_kwargs):
+        return MCPServer(server_id=table.server_id, name=table.server_name, transport=table.transport)
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
+            return_value=repository,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=MagicMock(),
+        ),
+        patch.object(manager, "build_mcp_server_from_table", new=build_from_table),
+        patch.object(manager, "_maybe_register_openapi_tools", new=AsyncMock()),
+        patch.object(manager, "_prime_oauth_metadata_discovery_for_servers"),
+        caplog.at_level(logging.WARNING, logger="LiteLLM"),
+    ):
+        for transport in transports:
+            row = LiteLLM_MCPServerTable(
+                server_id="srv-null-ts", server_name="null_ts", transport=transport, command="python", updated_at=None
+            )
+            repository.table.find_many = AsyncMock(return_value=[MagicMock(model_dump=row.model_dump)])
+            await manager.reload_servers_from_database()
+
+    assert manager.registry["srv-null-ts"].transport == transports[-1]
+    assert sum("'null_ts' will not start" in m for m in caplog.messages) == expected_warnings
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("with_caller,legacy_factory", [(True, False), (False, False), (True, True)])
 async def test_client_sampling_does_not_fill_explicit_context_from_another_ambient_caller(with_caller, legacy_factory):
     from mcp.server.auth.middleware.auth_context import auth_context_var

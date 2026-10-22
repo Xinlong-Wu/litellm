@@ -4091,6 +4091,7 @@ version = "0.1.0"
 dependencies = [
  "litellm-migrate-macros",
  "rstest",
+ "schemars 1.2.2",
 ]
 
 [[package]]

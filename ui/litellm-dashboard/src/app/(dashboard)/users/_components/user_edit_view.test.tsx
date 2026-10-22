@@ -15,6 +15,10 @@ vi.mock("@/utils/roles", () => ({
   all_admin_roles: ["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer", "org_admin"],
 }));
 
+vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
+  useAccessGroups: vi.fn().mockReturnValue({ data: [], isLoading: false, isError: false }),
+}));
+
 describe("UserEditView", () => {
   const MOCK_USER_DATA = {
     user_id: "user-123",
@@ -468,7 +472,7 @@ describe("UserEditView", () => {
       return onSubmit.mock.calls[0][0];
     };
 
-    it("should send exactly the ten keys an admin edit produces, with seeded types preserved", async () => {
+    it("should send exactly the eleven keys an admin edit produces, with seeded types preserved", async () => {
       const payload = await submittedPayload();
 
       expect(Object.keys(payload).sort()).toEqual([
@@ -477,6 +481,7 @@ describe("UserEditView", () => {
         "mcp_servers_and_groups",
         "mcp_tool_permissions",
         "metadata",
+        "model_group_max_budget",
         "models",
         "user_alias",
         "user_email",
@@ -491,6 +496,7 @@ describe("UserEditView", () => {
         models: ["gpt-4", "gpt-3.5-turbo"],
         max_budget: 100.5,
         budget_duration: "30d",
+        model_group_max_budget: {},
         metadata: { key1: "value1", key2: "value2" },
         mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
         mcp_tool_permissions: {},
@@ -518,6 +524,7 @@ describe("UserEditView", () => {
         "budget_duration",
         "max_budget",
         "metadata",
+        "model_group_max_budget",
         "models",
         "user_alias",
         "user_email",

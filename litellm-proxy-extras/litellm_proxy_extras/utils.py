@@ -135,6 +135,17 @@ _SPEND_LOGS_PK_CLAUSE_RE = re.compile(
     re.IGNORECASE,
 )
 
+HAND_BUILT_SPEND_LOGS_INDEXES: Final = frozenset(
+    {
+        "LiteLLM_SpendLogs_api_key_startTime_idx",
+        "LiteLLM_SpendLogs_litellm_call_id_idx",
+    }
+)
+_CREATE_INDEX_RE: Final = re.compile(
+    r'^\s*CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?"(?P<index>[^"]+)"\s+ON\b',
+    re.IGNORECASE,
+)
+
 PARTITIONED_SPEND_LOGS_PUSH_ERROR = (
     "LiteLLM_SpendLogs is a partitioned table (see db_scripts/partition_spend_logs.sql), "
     "so its primary key must include the partition key (\"startTime\"). `prisma db push` "
@@ -183,6 +194,21 @@ def filter_partitioned_spend_logs_diff(diff_sql: str) -> str:
         if filtered is not None
     )
     return "".join(f"{statement};\n\n" for statement in kept)
+
+
+def filter_hand_built_spend_logs_index_diff(diff_sql: str) -> str:
+    """The `prisma migrate diff` script without the statements that create the
+    LiteLLM_SpendLogs indexes schema.prisma declares but the migrations deliberately
+    leave for operators to build online."""
+    kept: Final = tuple(
+        statement for statement in diff_sql.split(";") if not _creates_hand_built_spend_logs_index(statement)
+    )
+    return ";".join(kept) if any(part.strip() for part in kept) else ""
+
+
+def _creates_hand_built_spend_logs_index(statement: str) -> bool:
+    match: Final = _CREATE_INDEX_RE.match(_without_sql_comments(statement))
+    return match is not None and match["index"] in HAND_BUILT_SPEND_LOGS_INDEXES
 
 
 def _migration_timestamp(name: str) -> int:

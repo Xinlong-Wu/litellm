@@ -160,6 +160,7 @@ from litellm.router_utils.routing_groups import parse_routing_groups
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import (
     PRICING_OVERRIDES_KEY,
+    CallTypes,
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
@@ -517,7 +518,11 @@ from litellm.proxy.container_endpoints.endpoints import router as container_rout
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
 from litellm.proxy.db.create_views import SupportsRawQueries
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
-from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
+from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SPEND_LOG_CLEANUP_BOUND_SETTINGS, SpendLogCleanup
+from litellm.proxy.db.db_transaction_queue.spend_log_prompt_cleanup import (
+    SpendLogPromptCleanup,
+    parse_prompt_retention_seconds,
+)
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     build_window_spend_transaction,
 )
@@ -8813,7 +8818,7 @@ class ProxyConfig:
                         db_guardrail_ids.add(guardrail_id)
                     try:
                         IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
-                            guardrail=cast(Guardrail, guardrail),
+                            guardrail=guardrail,
                         )
                     except Exception as e:  # noqa: BLE001  # one unloadable row must not stop the remaining guardrails
                         verbose_proxy_logger.error(
@@ -9611,6 +9616,43 @@ _OPENAI_STREAM_DONE_FRAME: Final = "data: [DONE]\n\n"
 _MAX_RAW_SSE_BUFFER_CHARS: Final = 8 * 1024 * 1024
 
 
+def _is_responses_stream_request(request_data: Mapping[str, Any]) -> bool:
+    logging_obj = request_data.get("litellm_logging_obj")
+    if isinstance(logging_obj, dict):
+        call_type = logging_obj.get("call_type")
+    else:
+        call_type = getattr(logging_obj, "call_type", None)
+    return call_type in (CallTypes.responses.value, CallTypes.aresponses.value)
+
+
+def _responses_error_event_from_exception(exception: Exception, error_message: str) -> Mapping[str, Any]:
+    current_exception: Exception | None = exception
+    for _ in range(8):
+        if current_exception is None:
+            break
+        error_event = getattr(current_exception, "_litellm_response_error_event", None)
+        if isinstance(error_event, dict) and error_event.get("type") == "error":
+            return error_event
+        original_exception = getattr(current_exception, "original_exception", None)
+        if not isinstance(original_exception, Exception) or original_exception is current_exception:
+            break
+        current_exception = original_exception
+
+    raw_code = getattr(exception, "code", None)
+    if raw_code is None:
+        raw_code = getattr(exception, "status_code", 500)
+    raw_message = getattr(exception, "message", None)
+    raw_param = getattr(exception, "param", None)
+    raw_sequence_number = getattr(exception, "sequence_number", 0)
+    return {
+        "type": "error",
+        "code": str(raw_code) if raw_code is not None else None,
+        "message": raw_message if isinstance(raw_message, str) else error_message,
+        "param": raw_param if isinstance(raw_param, str) else None,
+        "sequence_number": raw_sequence_number if isinstance(raw_sequence_number, int) else 0,
+    }
+
+
 def _pop_complete_sse_frame(buffer: str) -> tuple[str | None, str]:
     delimiter_positions: Final = [
         (position, delimiter) for delimiter in _SSE_FRAME_DELIMITERS if (position := buffer.find(delimiter)) != -1
@@ -10058,13 +10100,17 @@ async def async_data_generator(
             # Including it in the SSE response leaks internal details to clients.
             error_msg = str(e)
 
-        proxy_exception: Final = ProxyException(
-            message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
-        )
-        error_returned: Final = json.dumps({"error": proxy_exception.to_dict()})
+        error_returned: Final[str]
+        if _is_responses_stream_request(request_data):
+            error_returned = json.dumps(_responses_error_event_from_exception(e, error_msg))
+        else:
+            proxy_exception: Final = ProxyException(
+                message=getattr(e, "message", error_msg),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", 500),
+            )
+            error_returned = json.dumps({"error": proxy_exception.to_dict()})
         stream_completed = True
         yield f"data: {error_returned}\n\n"
     finally:

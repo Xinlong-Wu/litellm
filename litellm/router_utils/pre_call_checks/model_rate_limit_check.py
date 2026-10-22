@@ -21,7 +21,6 @@ from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
-    ITPM_RESERVED_KEY,
     async_io_token_pre_call_check,
     async_io_token_reconcile_success,
     async_io_token_refund_failure,
@@ -30,6 +29,7 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     io_token_pre_call_check,
     io_token_reconcile_success,
     io_token_refund_failure,
+    read_io_token_reservation_from_kwargs,
 )
 from litellm.types.router import RouterErrors
 from litellm.types.utils import StandardLoggingPayload
@@ -336,9 +336,8 @@ class ModelRateLimitingCheck(CustomLogger):
             # (which only the TPM-tracking path needs). Otherwise a request whose
             # standard_logging_object lacks model_id would never return its
             # reservation, leaving the counter elevated until the TTL expires.
-            slo_metadata: Final = (standard_logging_object.get("metadata") or {}) if standard_logging_object else {}
-            kwargs_metadata: Final = kwargs.get("metadata") or {}
-            if ITPM_RESERVED_KEY in slo_metadata or ITPM_RESERVED_KEY in kwargs_metadata:
+            _, _, itpm_cache_key, otpm_cache_key = read_io_token_reservation_from_kwargs(kwargs)
+            if itpm_cache_key is not None or otpm_cache_key is not None:
                 await async_io_token_reconcile_success(
                     self.dual_cache,
                     kwargs,
@@ -401,9 +400,8 @@ class ModelRateLimitingCheck(CustomLogger):
         """
         try:
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
-            slo_metadata: Final = (standard_logging_object.get("metadata") or {}) if standard_logging_object else {}
-            kwargs_metadata: Final = kwargs.get("metadata") or {}
-            if ITPM_RESERVED_KEY in slo_metadata or ITPM_RESERVED_KEY in kwargs_metadata:
+            _, _, itpm_cache_key, otpm_cache_key = read_io_token_reservation_from_kwargs(kwargs)
+            if itpm_cache_key is not None or otpm_cache_key is not None:
                 io_token_reconcile_success(
                     self.dual_cache,
                     kwargs,

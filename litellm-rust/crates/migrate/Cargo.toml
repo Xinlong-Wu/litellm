@@ -5,8 +5,12 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+schema = ["dep:schemars"]
+
 [dependencies]
 litellm-migrate-macros.workspace = true
+schemars = { workspace = true, optional = true }
 
 [dev-dependencies]
 rstest.workspace = true

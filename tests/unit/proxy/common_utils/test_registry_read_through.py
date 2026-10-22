@@ -1,9 +1,16 @@
 import asyncio
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import pytest
 
 from litellm.proxy.common_utils.registry_read_through import RegistryReadThrough
+
+if TYPE_CHECKING:
+    from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
+
+
+def nothing_loaded(_key: str) -> bool:
+    return False
 
 
 class ResyncSpy:
@@ -22,7 +29,7 @@ class ResyncSpy:
 @pytest.mark.asyncio
 async def test_attempt_returns_true_when_resync_finds_object():
     spy: Final = ResyncSpy(found=True)
-    read_through: Final = RegistryReadThrough(resync=spy)
+    read_through: Final = RegistryReadThrough(resync=spy, is_loaded=nothing_loaded)
 
     assert await read_through.attempt("new-model") is True
     assert spy.calls == ["new-model"]
@@ -31,7 +38,7 @@ async def test_attempt_returns_true_when_resync_finds_object():
 @pytest.mark.asyncio
 async def test_attempt_found_key_is_not_negative_cached():
     spy: Final = ResyncSpy(found=True)
-    read_through: Final = RegistryReadThrough(resync=spy)
+    read_through: Final = RegistryReadThrough(resync=spy, is_loaded=nothing_loaded)
 
     assert await read_through.attempt("new-model") is True
     assert await read_through.attempt("new-model") is True
@@ -41,7 +48,7 @@ async def test_attempt_found_key_is_not_negative_cached():
 @pytest.mark.asyncio
 async def test_missing_key_is_negative_cached_within_ttl():
     spy: Final = ResyncSpy(found=False)
-    read_through: Final = RegistryReadThrough(resync=spy, miss_ttl_seconds=60.0)
+    read_through: Final = RegistryReadThrough(resync=spy, is_loaded=nothing_loaded, miss_ttl_seconds=60.0)
 
     assert await read_through.attempt("ghost-model") is False
     assert await read_through.attempt("ghost-model") is False
@@ -51,7 +58,7 @@ async def test_missing_key_is_negative_cached_within_ttl():
 @pytest.mark.asyncio
 async def test_negative_cache_expires_and_resync_runs_again():
     spy: Final = ResyncSpy(found=False)
-    read_through: Final = RegistryReadThrough(resync=spy, miss_ttl_seconds=0.05)
+    read_through: Final = RegistryReadThrough(resync=spy, is_loaded=nothing_loaded, miss_ttl_seconds=0.05)
 
     assert await read_through.attempt("ghost-model") is False
     await asyncio.sleep(0.1)
@@ -62,7 +69,7 @@ async def test_negative_cache_expires_and_resync_runs_again():
 @pytest.mark.asyncio
 async def test_resync_exception_returns_false_without_negative_caching():
     spy: Final = ResyncSpy(error=RuntimeError("db down"))
-    read_through: Final = RegistryReadThrough(resync=spy)
+    read_through: Final = RegistryReadThrough(resync=spy, is_loaded=nothing_loaded)
 
     assert await read_through.attempt("new-model") is False
     assert await read_through.attempt("new-model") is False
@@ -77,7 +84,7 @@ async def test_concurrent_attempts_for_missing_key_resync_once():
             return await super().__call__(key)
 
     spy: Final = SlowResyncSpy(found=False)
-    read_through: Final = RegistryReadThrough(resync=spy, miss_ttl_seconds=60.0)
+    read_through: Final = RegistryReadThrough(resync=spy, is_loaded=nothing_loaded, miss_ttl_seconds=60.0)
 
     results: Final = await asyncio.gather(*(read_through.attempt("ghost-model") for _ in range(5)))
     assert results == [False] * 5
@@ -87,7 +94,7 @@ async def test_concurrent_attempts_for_missing_key_resync_once():
 @pytest.mark.asyncio
 async def test_distinct_keys_do_not_share_negative_cache():
     spy: Final = ResyncSpy(found=False)
-    read_through: Final = RegistryReadThrough(resync=spy, miss_ttl_seconds=60.0)
+    read_through: Final = RegistryReadThrough(resync=spy, is_loaded=nothing_loaded, miss_ttl_seconds=60.0)
 
     assert await read_through.attempt("ghost-a") is False
     assert await read_through.attempt("ghost-b") is False
@@ -98,7 +105,11 @@ async def test_distinct_keys_do_not_share_negative_cache():
 async def test_resync_budget_exhausted_blocks_resync_without_negative_caching():
     spy: Final = ResyncSpy(found=False)
     read_through: Final = RegistryReadThrough(
-        resync=spy, miss_ttl_seconds=60.0, max_resyncs_per_window=2, resync_window_seconds=60.0
+        resync=spy,
+        is_loaded=nothing_loaded,
+        miss_ttl_seconds=60.0,
+        max_resyncs_per_window=2,
+        resync_window_seconds=60.0,
     )
 
     assert await read_through.attempt("ghost-a") is False
@@ -109,9 +120,47 @@ async def test_resync_budget_exhausted_blocks_resync_without_negative_caching():
 
 
 @pytest.mark.asyncio
+async def test_requests_queued_behind_a_successful_resync_spend_no_budget():
+    from unittest.mock import AsyncMock, call
+
+    entered: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+    new_model_loaded: Final = asyncio.Event()
+
+    async def gated_load(key: str) -> bool:
+        entered.set()
+        await release.wait()
+        if key == "new-model":
+            new_model_loaded.set()
+        return True
+
+    def is_loaded(key: str) -> bool:
+        return key == "new-model" and new_model_loaded.is_set()
+
+    resync: Final = AsyncMock(side_effect=gated_load)
+    read_through: Final = RegistryReadThrough(
+        resync=resync,
+        is_loaded=is_loaded,
+        max_resyncs_per_window=2,
+        resync_window_seconds=60.0,
+    )
+
+    burst: Final = asyncio.gather(*(read_through.attempt("new-model") for _ in range(25)))
+    await entered.wait()
+    release.set()
+
+    assert await burst == [True] * 25
+    assert resync.await_args_list == [call("new-model")]
+    assert await read_through.attempt("other-model") is True
+    assert resync.await_args_list == [call("new-model"), call("other-model")]
+
+
+@pytest.mark.asyncio
 async def test_resync_budget_replenishes_after_window():
     spy: Final = ResyncSpy(found=True)
-    read_through: Final = RegistryReadThrough(resync=spy, max_resyncs_per_window=1, resync_window_seconds=0.05)
+    read_through: Final = RegistryReadThrough(
+        resync=spy, is_loaded=nothing_loaded, max_resyncs_per_window=1, resync_window_seconds=0.05
+    )
 
     assert await read_through.attempt("model-a") is True
     assert await read_through.attempt("model-b") is False

@@ -25,10 +25,16 @@ def _env_and_reload(**env):
     saved = {key: os.environ.get(key) for key in env}
     utils_module = importlib.import_module(UTILS_MODULE)
     mgmt_module = importlib.import_module(MGMT_MODULE)
-    # Restore pre-reload module attributes afterwards instead of reloading again:
-    # a reload re-creates the module's classes, breaking exception identity for
-    # modules that imported them earlier
-    snapshots = {module: dict(vars(module)) for module in (utils_module, mgmt_module)}
+    # Snapshot the modules' attributes so they can be restored to their ORIGINAL
+    # class objects afterwards. Reloading to "undo" would mint brand-new classes
+    # (e.g. MCPMissingUserEnvVarsError) that diverge from the references frozen
+    # at import time by consumers such as mcp_server_manager, which then raises a
+    # class that sibling tests' ``pytest.raises`` (resolving the current one) no
+    # longer match — a cross-test failure on the same xdist worker.
+    utils_module = importlib.import_module(UTILS_MODULE)
+    mgmt_module = importlib.import_module(MGMT_MODULE)
+    saved_utils = dict(utils_module.__dict__)
+    saved_mgmt = dict(mgmt_module.__dict__)
 
     def _apply_env(values):
         for key, value in values.items():
@@ -37,26 +43,23 @@ def _env_and_reload(**env):
             else:
                 os.environ[key] = value
 
-    def _reload():
-        utils = importlib.reload(utils_module)
-        mgmt = importlib.reload(mgmt_module)
-        return utils, mgmt
+    def _restore_module(module, snapshot):
+        module.__dict__.clear()
+        module.__dict__.update(snapshot)
 
     try:
         _apply_env(env)
-        yield _reload()
+        utils = importlib.reload(utils_module)
+        mgmt = importlib.reload(mgmt_module)
+        yield utils, mgmt
     finally:
         _apply_env(saved)
-        for module, snapshot in snapshots.items():
-            for key in [key for key in vars(module) if key not in snapshot]:
-                delattr(module, key)
-            vars(module).update(snapshot)
+        _restore_module(utils_module, saved_utils)
+        _restore_module(mgmt_module, saved_mgmt)
 
 
 def test_defaults_used_when_env_unset():
-    with _env_and_reload(
-        LITELLM_MCP_SERVER_NAME=None, LITELLM_MCP_SERVER_DESCRIPTION=None
-    ) as (utils, _mgmt):
+    with _env_and_reload(LITELLM_MCP_SERVER_NAME=None, LITELLM_MCP_SERVER_DESCRIPTION=None) as (utils, _mgmt):
         assert utils.LITELLM_MCP_SERVER_NAME == "litellm-mcp-server"
         assert utils.LITELLM_MCP_SERVER_DESCRIPTION == "MCP Server for LiteLLM"
 

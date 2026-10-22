@@ -443,6 +443,8 @@ class RealTimeStreaming:
             )
             sent = False
             for msg in transformed:
+                if not isinstance(msg, bytes):
+                    msg = self._maybe_inject_guardrail_auto_response_disable(msg)
                 if isinstance(msg, bytes):
                     await self.provider_config.pace_backend_send(msg)
                     await self.backend_ws.send(msg)
@@ -457,7 +459,6 @@ class RealTimeStreaming:
                     if self._content_sent_after_setup:
                         verbose_logger.debug("Dropping follow-up setup after content was already sent to backend")
                         continue
-                    msg = self._maybe_inject_guardrail_auto_response_disable(msg)
                     await self.backend_ws.send(msg)
                     self._cache_session_configuration_request(msg)
                     sent = True
