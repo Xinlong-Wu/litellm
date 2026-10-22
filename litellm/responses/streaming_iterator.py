@@ -262,7 +262,7 @@ def _status_code_for_error_fields(error_type: str | None, error_code: str | None
 
 
 def stream_error_status_and_message(error_obj: object) -> tuple[int, str]:
-    message, error_type, error_code = _error_event_fields(error_obj)
+    message, error_type, error_code, _ = _error_event_fields(error_obj)
     return _status_code_for_error_fields(error_type, error_code), message
 
 
