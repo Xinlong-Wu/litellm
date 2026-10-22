@@ -6254,7 +6254,9 @@ async def test_tag_cache_update_multiple_tags():
 
             await asyncio.sleep(0.1)
 
-            mock_get_cache.assert_awaited_once_with(keys=["tag:tag1", "tag:tag2"], parent_otel_span=None, throttle_redis=False)
+            mock_get_cache.assert_awaited_once_with(
+                keys=["tag:tag1", "tag:tag2"], parent_otel_span=None, throttle_redis=False
+            )
             mock_set_cache.assert_awaited_once()
 
             call_args = mock_set_cache.call_args
@@ -8138,10 +8140,18 @@ async def test_update_general_settings_db_pass_through_endpoint_overrides_yaml_e
     request.headers = {}
     request.query_params = {}
 
-    settings: Final = patch("litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]})  # test-quality-ok: the method reads this module global; no injection seam
-    yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint])  # test-quality-ok: module global holding the YAML endpoints the fix merges in
-    initialize: Final = patch("litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock())  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
-    master_key: Final = patch("litellm.proxy.proxy_server.master_key", "sk-master")  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
+    settings: Final = patch(
+        "litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]}
+    )  # test-quality-ok: the method reads this module global; no injection seam
+    yaml_endpoints: Final = patch(
+        "litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint]
+    )  # test-quality-ok: module global holding the YAML endpoints the fix merges in
+    initialize: Final = patch(
+        "litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock()
+    )  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
+    master_key: Final = patch(
+        "litellm.proxy.proxy_server.master_key", "sk-master"
+    )  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
     with settings, yaml_endpoints, initialize, master_key:
         await ProxyConfig()._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
 
@@ -14947,7 +14957,7 @@ def test_docs_redoc_openapi_are_reachable_by_default():
     assert "paths" in openapi_response.json()
 
 
-def test_production_app_docs_urls_are_wired_to_the_real_env_helpers():
+def test_production_app_docs_urls_are_wired_to_the_real_env_helpers(monkeypatch):
     """
     LIT-6745: pins the actual `FastAPI(docs_url=..., redoc_url=..., openapi_url=...)`
     construction in proxy_server.py to _get_docs_url/_get_redoc_url/_get_openapi_url,
@@ -14955,6 +14965,9 @@ def test_production_app_docs_urls_are_wired_to_the_real_env_helpers():
     the helpers themselves are covered separately.
     """
     from litellm.proxy import utils as proxy_utils
+
+    for flag in ("DOCS_URL", "REDOC_URL", "OPENAPI_URL", "NO_DOCS", "NO_REDOC", "NO_OPENAPI"):
+        monkeypatch.delenv(flag, raising=False)
 
     assert app.docs_url == proxy_utils._get_docs_url()
     assert app.redoc_url == proxy_utils._get_redoc_url()
