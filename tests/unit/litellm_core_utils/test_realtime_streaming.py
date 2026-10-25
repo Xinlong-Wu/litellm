@@ -180,6 +180,7 @@ async def test_backend_to_client_skips_non_utf8_binary_frames():
     logging_obj = MagicMock()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
 
     await streaming.backend_to_client_send_messages()

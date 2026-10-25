@@ -297,6 +297,7 @@ async def test_vertex_realtime_text_in_text_out():
     logging_obj.pre_call = MagicMock()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
 
     streaming = RealTimeStreaming(
         websocket=client_ws,
