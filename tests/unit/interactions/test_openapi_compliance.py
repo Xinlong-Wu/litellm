@@ -277,12 +277,11 @@ class TestResponseCompliance:
             "cancelled",
             "incomplete",
             "budget_exceeded",
-            "queued",
         ]
         assert status_prop["enum"] == expected_statuses
         assert [status.value for status in InteractionStatus] == expected_statuses
-        interaction = Interaction.model_validate({"id": "interaction-test", "status": "queued"})
-        assert interaction.status.value == "queued"
+        interaction = Interaction.model_validate({"id": "interaction-test", "status": "budget_exceeded"})
+        assert interaction.status.value == "budget_exceeded"
         print(f"✓ Status enum values: {expected_statuses}")
 
     def test_usage_schema(self, spec_dict):
