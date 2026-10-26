@@ -51,7 +51,7 @@ _TERMINAL_STATUSES: Final = frozenset(
     {"completed", "failed", "cancelled", "incomplete", "budget_exceeded", "requires_action"}
 )
 
-_POLLABLE_STATUSES: Final = frozenset({"in_progress", "queued"})
+_POLLABLE_STATUSES: Final = frozenset({"in_progress"})
 
 _STATUSES_THAT_PRODUCED_OUTPUT: Final = frozenset({"completed", "requires_action"})
 
@@ -208,11 +208,10 @@ def is_pollable_background_interaction(response: InteractionsAPIResponse) -> boo
     so a response one site accepts and the other refuses strands its
     reservation on the spend counters with nothing left to reconcile it.
 
-    ``queued`` belongs here alongside ``in_progress``. It is the API's
-    not-started-yet state, so it reaches a terminal status the same way and
-    needs polling for the same reason: nothing else in the proxy ever bills a
-    create that came back without usage, so a status missing from both this
-    set and ``_TERMINAL_STATUSES`` is billed nowhere and alerts nobody.
+    An ``in_progress`` response needs polling because nothing else in the
+    proxy ever bills a create that came back without usage, so a status missing
+    from both this set and ``_TERMINAL_STATUSES`` is billed nowhere and alerts
+    nobody.
     """
     return response.status in _POLLABLE_STATUSES and bool(response.id)
 

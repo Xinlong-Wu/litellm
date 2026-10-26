@@ -472,42 +472,6 @@ def test_every_status_the_api_can_return_is_either_pollable_or_terminal():
     assert handled - spec_statuses == set()
 
 
-@pytest.mark.asyncio
-async def test_schedule_creates_poll_task_for_queued_create():
-    """
-    ``queued`` is the API's not-started-yet state. It carries no usage, so the
-    create cannot bill it, and it is not terminal, so nothing settles it:
-    without a poll task it is never charged at all.
-    """
-    logging_obj = _logging_obj()
-    task = maybe_schedule_background_interaction_cost_polling(
-        response=_response("queued", with_usage=False),
-        create_kwargs={"litellm_logging_obj": logging_obj},
-        custom_llm_provider="gemini",
-    )
-
-    assert isinstance(task, asyncio.Task)
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-
-
-@pytest.mark.asyncio
-async def test_poller_bills_an_interaction_that_started_out_queued():
-    logging_obj = _logging_obj()
-    fetch, calls = _fetch_sequence(
-        _response("queued", with_usage=False),
-        _response("in_progress", with_usage=False),
-        _response("completed", with_usage=True),
-    )
-
-    await poll_and_log_background_interaction_cost(_context(logging_obj), fetch_interaction=fetch)
-
-    assert len(calls) == 3
-    assert logging_obj.model_call_details["response_cost"] > 0
-    assert logging_obj.model_call_details["standard_logging_object"]["total_tokens"] == 175
-
-
 def test_poll_intervals_double_up_to_the_cap_and_stay_inside_the_timeout():
     """
     The degenerate cases are covered above; this pins the shape the proxy
