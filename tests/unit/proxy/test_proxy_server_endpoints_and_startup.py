@@ -102,7 +102,9 @@ def test_cors_exposes_cache_key_header_to_browser_js():
     from litellm.constants import LITELLM_UI_ALLOW_HEADERS
 
     cors_middleware = next(m for m in app.user_middleware if m.cls is CORSMiddleware)
-    assert cors_middleware.kwargs["expose_headers"] is LITELLM_UI_ALLOW_HEADERS
+    # Module reloads in the shared test fixture can create a fresh constants
+    # module; compare the configured header values rather than object identity.
+    assert cors_middleware.kwargs["expose_headers"] == LITELLM_UI_ALLOW_HEADERS
     assert "x-litellm-cache-key" in cors_middleware.kwargs["expose_headers"]
 
 
@@ -6369,7 +6371,9 @@ async def test_tag_cache_update_multiple_tags():
 
             await asyncio.sleep(0.1)
 
-            mock_get_cache.assert_awaited_once_with(keys=["tag:tag1", "tag:tag2"], parent_otel_span=None, throttle_redis=False)
+            mock_get_cache.assert_awaited_once_with(
+                keys=["tag:tag1", "tag:tag2"], parent_otel_span=None, throttle_redis=False
+            )
             mock_set_cache.assert_awaited_once()
 
             call_args = mock_set_cache.call_args
@@ -15176,7 +15180,7 @@ def test_docs_redoc_openapi_are_reachable_by_default():
     assert "paths" in openapi_response.json()
 
 
-def test_production_app_docs_urls_are_wired_to_the_real_env_helpers():
+def test_production_app_docs_urls_are_wired_to_the_real_env_helpers(monkeypatch):
     """
     LIT-6745: pins the actual `FastAPI(docs_url=..., redoc_url=..., openapi_url=...)`
     construction in proxy_server.py to _get_docs_url/_get_redoc_url/_get_openapi_url,
@@ -15184,6 +15188,9 @@ def test_production_app_docs_urls_are_wired_to_the_real_env_helpers():
     the helpers themselves are covered separately.
     """
     from litellm.proxy import utils as proxy_utils
+
+    for flag in ("DOCS_URL", "REDOC_URL", "OPENAPI_URL", "NO_DOCS", "NO_REDOC", "NO_OPENAPI"):
+        monkeypatch.delenv(flag, raising=False)
 
     assert app.docs_url == proxy_utils._get_docs_url()
     assert app.redoc_url == proxy_utils._get_redoc_url()

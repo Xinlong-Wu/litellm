@@ -39,7 +39,7 @@ def _otel_runtime() -> (
     """
     try:
         from litellm.integrations.otel import logger
-    except Exception:
+    except ImportError:
         return None
     return (logger.phase_span, logger.seed_request_identity, logger.phase_event, logger.phase_attributes)
 

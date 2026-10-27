@@ -367,6 +367,7 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
         "total_response_time_ms": 0,
         "timed_requests": 0,
         "failed_requests": 0,
+        "distinct_api_keys": None,
     }
     mock_rows = [
         # (date, endpoint) — rolls up across api_keys and models
@@ -376,7 +377,6 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
             "endpoint": "/v1/chat/completions",
             "api_key": None,
             "group_level": 62,
-            "distinct_api_keys": None,
             "spend": 15.0,
             "prompt_tokens": 150,
             "completion_tokens": 75,
@@ -389,7 +389,31 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
             "endpoint": "/v1/embeddings",
             "api_key": None,
             "group_level": 62,
-            "distinct_api_keys": None,
+            "spend": 3.0,
+            "prompt_tokens": 30,
+            "completion_tokens": 0,
+            "api_requests": 1,
+            "successful_requests": 1,
+        },
+        # (date, endpoint, api_key) — populates the per-key sub-bucket
+        {
+            **base,
+            "date": "2024-01-01",
+            "endpoint": "/v1/chat/completions",
+            "api_key": "key-1",
+            "group_level": 30,
+            "spend": 15.0,
+            "prompt_tokens": 150,
+            "completion_tokens": 75,
+            "api_requests": 2,
+            "successful_requests": 2,
+        },
+        {
+            **base,
+            "date": "2024-01-01",
+            "endpoint": "/v1/embeddings",
+            "api_key": "key-2",
+            "group_level": 30,
             "spend": 3.0,
             "prompt_tokens": 30,
             "completion_tokens": 0,
@@ -403,7 +427,6 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
             "endpoint": None,
             "api_key": None,
             "group_level": 63,
-            "distinct_api_keys": None,
             "spend": 18.0,
             "prompt_tokens": 180,
             "completion_tokens": 75,
@@ -417,39 +440,11 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
             "endpoint": None,
             "api_key": None,
             "group_level": 127,
-            "distinct_api_keys": None,
             "spend": 18.0,
             "prompt_tokens": 180,
             "completion_tokens": 75,
             "api_requests": 3,
             "successful_requests": 3,
-        },
-        # (date, endpoint, api_key) — populates the per-key sub-bucket
-        {
-            **base,
-            "date": "2024-01-01",
-            "endpoint": "/v1/chat/completions",
-            "api_key": "key-1",
-            "group_level": 30,
-            "distinct_api_keys": 2,
-            "spend": 15.0,
-            "prompt_tokens": 150,
-            "completion_tokens": 75,
-            "api_requests": 2,
-            "successful_requests": 2,
-        },
-        {
-            **base,
-            "date": "2024-01-01",
-            "endpoint": "/v1/embeddings",
-            "api_key": "key-2",
-            "group_level": 30,
-            "distinct_api_keys": 2,
-            "spend": 3.0,
-            "prompt_tokens": 30,
-            "completion_tokens": 0,
-            "api_requests": 1,
-            "successful_requests": 1,
         },
     ]
 
@@ -731,7 +726,9 @@ async def test_get_api_key_metadata_recovers_double_hashed_key_via_reverse_hash(
         return_value=[SimpleNamespace(user_id="alice", user_email="alice@example.com")]
     )
     mock_prisma.db.query_raw = AsyncMock(
-        return_value=[{"digest": double_hashed, "key_alias": "batch-worker", "team_id": "team-1", "user_id": "alice"}]
+        return_value=[
+            {"digest": double_hashed, "key_alias": "batch-worker", "team_id": "team-1", "user_id": "alice"}
+        ]
     )
 
     result = await get_api_key_metadata(
@@ -1130,6 +1127,7 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
         "total_response_time_ms": 0,
         "timed_requests": 0,
         "failed_requests": 0,
+        "distinct_api_keys": None,
     }
     mock_rows = [
         {
@@ -1138,7 +1136,6 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
             "endpoint": "/v1/chat/completions",
             "api_key": None,
             "group_level": 62,
-            "distinct_api_keys": None,
             "spend": 10.0,
             "prompt_tokens": 100,
             "completion_tokens": 50,
@@ -1151,7 +1148,6 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
             "endpoint": "/v1/chat/completions",
             "api_key": "deleted-key-hash",
             "group_level": 30,
-            "distinct_api_keys": 1,
             "spend": 10.0,
             "prompt_tokens": 100,
             "completion_tokens": 50,
@@ -1431,7 +1427,6 @@ async def test_get_daily_activity_aggregated_empty_result_set():
             "mcp_namespaced_tool_name": None,
             "endpoint": None,
             "group_level": 127,
-            "distinct_api_keys": None,
             "spend": None,
             "prompt_tokens": None,
             "completion_tokens": None,
@@ -1447,6 +1442,7 @@ async def test_get_daily_activity_aggregated_empty_result_set():
             "api_requests": None,
             "successful_requests": None,
             "failed_requests": None,
+            "distinct_api_keys": None,
         }
     ]
     mock_prisma.db.query_raw = AsyncMock(return_value=mock_rows)
@@ -2221,12 +2217,13 @@ async def test_get_daily_activity_aggregated_with_entity_breakdown():
         "completion_tokens": 0,
         "api_requests": 0,
         "successful_requests": 0,
+        "distinct_api_keys": None,
     }
     main_rows = [
-        {**base, "date": None, "group_level": 127, "distinct_api_keys": None, "spend": 18.0},
-        {**base, "date": "2024-01-01", "group_level": 63, "distinct_api_keys": None, "spend": 18.0},
-        {**base, "date": "2024-01-01", "model": "gpt-4o", "group_level": 47, "distinct_api_keys": None, "spend": 18.0},
-        {**base, "date": "2024-01-01", "api_key": "key-1", "group_level": 31, "distinct_api_keys": 1, "spend": 12.0},
+        {**base, "date": None, "group_level": 127, "spend": 18.0},
+        {**base, "date": "2024-01-01", "group_level": 63, "spend": 18.0},
+        {**base, "date": "2024-01-01", "model": "gpt-4o", "group_level": 47, "spend": 18.0},
+        {**base, "date": "2024-01-01", "api_key": "key-1", "group_level": 31, "spend": 12.0},
     ]
     entity_base: Final = {
         **{

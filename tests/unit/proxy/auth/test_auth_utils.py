@@ -33,6 +33,8 @@ from litellm.proxy.auth.auth_utils import (
     get_project_model_tpm_limit,
     get_request_route_template,
     is_request_body_safe,
+    log_once_if_budget_reservation_disabled,
+    warn_once_if_custom_auth_skips_common_checks,
 )
 from litellm.router import Router
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS

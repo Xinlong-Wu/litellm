@@ -1,6 +1,6 @@
 import asyncio
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn
 
@@ -13,7 +13,10 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.core_helpers import (
+    get_or_create_metadata_bucket,
+    get_parent_otel_span_from_kwargs,
+)
 from litellm.proxy._types import CommonProxyErrors, CurrentItemRateLimit, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     get_key_model_rpm_limit,
@@ -46,6 +49,20 @@ def _response_total_tokens(response_obj: object) -> int:
         return 0
     response_usage: Final = getattr(response_obj, "usage", None)
     return response_usage.total_tokens if isinstance(response_usage, Usage) else 0
+
+
+def _get_internal_metadata(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    litellm_params: Final = kwargs.get("litellm_params")
+    if isinstance(litellm_params, Mapping):
+        for metadata_key in ("litellm_metadata", "metadata"):
+            candidate = litellm_params.get(metadata_key)
+            if isinstance(candidate, Mapping) and candidate:
+                return candidate
+    for metadata_key in ("litellm_metadata", "metadata"):
+        candidate = kwargs.get(metadata_key)
+        if isinstance(candidate, Mapping) and candidate:
+            return candidate
+    return {}
 
 
 class CacheObject(TypedDict):
@@ -267,7 +284,15 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             max_parallel_requests = sys.maxsize
         if data is None:
             data = {}
-        global_max_parallel_requests: Final = data.get("metadata", {}).get("global_max_parallel_requests", None)
+        metadata_bucket: Final = next(
+            (
+                bucket
+                for metadata_key in ("litellm_metadata", "metadata")
+                if isinstance(bucket := data.get(metadata_key), dict)
+            ),
+            {},
+        )
+        global_max_parallel_requests: Final = metadata_bucket.get("global_max_parallel_requests")
         throttle_pct: Final = getattr(user_api_key_dict, "budget_throttle_pct", None)
         tpm_limit = throttled_limit(getattr(user_api_key_dict, "tpm_limit", sys.maxsize), throttle_pct)
         if tpm_limit is None:
@@ -401,9 +426,8 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 f"litellm-key-remaining-requests-{_model}": _remaining_requests,
             }
 
-            if "metadata" not in data:
-                data["metadata"] = {}
-            data["metadata"].update(_remaining_limits_data)
+            _, model_metadata_bucket = get_or_create_metadata_bucket(data)
+            model_metadata_bucket.update(_remaining_limits_data)
 
         # check if REQUEST ALLOWED for user_id
         user_id: Final = user_api_key_dict.user_id
@@ -506,19 +530,19 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         try:
             self.print_verbose("INSIDE parallel request limiter ASYNC SUCCESS LOGGING")
 
-            global_max_parallel_requests: Final = kwargs["litellm_params"]["metadata"].get(
-                "global_max_parallel_requests", None
-            )
-            user_api_key: Final = kwargs["litellm_params"]["metadata"]["user_api_key"]
-            user_api_key_user_id: Final = kwargs["litellm_params"]["metadata"].get("user_api_key_user_id", None)
-            user_api_key_team_id: Final = kwargs["litellm_params"]["metadata"].get("user_api_key_team_id", None)
-            user_api_key_model_max_budget: Final = kwargs["litellm_params"]["metadata"].get(
-                "user_api_key_model_max_budget", None
-            )
+            request_metadata: Final = _get_internal_metadata(kwargs)
+            global_max_parallel_requests: Final = request_metadata.get("global_max_parallel_requests", None)
+            user_api_key: Final = request_metadata.get("user_api_key")
+            user_api_key_user_id: Final = request_metadata.get("user_api_key_user_id", None)
+            user_api_key_team_id: Final = request_metadata.get("user_api_key_team_id", None)
+            user_api_key_model_max_budget: Final = request_metadata.get("user_api_key_model_max_budget", None)
             user_api_key_end_user_id: Final = kwargs.get("user")
 
-            user_api_key_metadata: Final = kwargs["litellm_params"]["metadata"].get("user_api_key_metadata", {}) or {}
-            user_api_key_team_metadata = kwargs["litellm_params"]["metadata"].get("user_api_key_team_metadata", None)
+            raw_user_api_key_metadata: Final = request_metadata.get("user_api_key_metadata")
+            user_api_key_metadata: Final[Mapping[str, object]] = (
+                raw_user_api_key_metadata if isinstance(raw_user_api_key_metadata, Mapping) else {}
+            )
+            user_api_key_team_metadata = request_metadata.get("user_api_key_team_metadata", None)
             user_api_key_dict: Final = UserAPIKeyAuth(
                 api_key=user_api_key,
                 metadata=user_api_key_metadata,

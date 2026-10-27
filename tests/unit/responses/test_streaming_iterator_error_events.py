@@ -30,6 +30,7 @@ import litellm
 from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.streaming_iterator import (
     _ERROR_CODE_HTTP_STATUS,
     BaseResponsesAPIStreamingIterator,
@@ -367,7 +368,7 @@ def test_response_failed_unknown_code_keeps_upstream_code_and_message_on_mapped_
     mapped = exc_info.value.original_exception
     assert isinstance(mapped, litellm.InternalServerError)
     assert mapped.code == "cyber_policy"
-    assert mapped.body == {"message": upstream_message, "type": None, "code": "cyber_policy"}
+    assert mapped.body == {"message": upstream_message, "type": None, "code": "cyber_policy", "param": None}
 
 
 def test_maybe_raise_for_error_event_null_error_obj():
@@ -380,6 +381,29 @@ def test_maybe_raise_for_error_event_null_error_obj():
         iterator._maybe_raise_for_error_event(chunk)
     assert exc_info.value.status_code == 500
     assert "Response API in-stream error" in str(exc_info.value)
+
+
+def test_maybe_raise_for_official_top_level_error_event_preserves_payload():
+    parsed_chunk = {
+        "type": "error",
+        "code": "cyber_policy",
+        "message": "Request blocked by upstream policy",
+        "param": "input",
+        "sequence_number": 7,
+    }
+    event = OpenAIResponsesAPIConfig().transform_streaming_response(
+        model="gpt-5",
+        parsed_chunk=parsed_chunk,
+        logging_obj=Mock(spec=LiteLLMLoggingObj),
+    )
+
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        _make_iterator()._maybe_raise_for_error_event(event)
+
+    original_exception = exc_info.value.original_exception
+    assert original_exception is not None
+    assert original_exception.message.endswith(parsed_chunk["message"])
+    assert getattr(original_exception, "_litellm_response_error_event") == parsed_chunk
 
 
 def _make_failed_chunk(error: dict, usage: ResponseAPIUsage | None = None) -> Mock:

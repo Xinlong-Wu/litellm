@@ -2342,6 +2342,10 @@ class TestRunServerDbSetup:
         mock_setup_database,
         mock_atexit_register,
         mock_subprocess_run,
+        arguments,
+        env,
+        exits,
+        capsys,
     ):
         """Test that proxy exits with code 1 when PrismaManager.setup_database returns False, with no opt-in flag"""
         from litellm.proxy.proxy_cli import run_server
@@ -2360,12 +2364,13 @@ class TestRunServerDbSetup:
         clean_env = {
             k: v
             for k, v in os.environ.items()
-            if k not in ("DATABASE_URL", "DIRECT_URL")
+            if k not in ("DATABASE_URL", "DIRECT_URL", "ENFORCE_PRISMA_MIGRATION_CHECK")
         }
         clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
+        assert exits is True
 
         with (
-            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(os.environ, {**clean_env, **env}, clear=True),
             patch.dict(
                 "sys.modules",
                 {
@@ -2382,11 +2387,11 @@ class TestRunServerDbSetup:
                 "host": "localhost",
                 "port": 8000,
             }
-
             with pytest.raises(SystemExit) as exc_info:
-                run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
-            assert exc_info.value.code == 1
-            mock_setup_database.assert_called_once_with(use_migrate=True, use_v2_resolver=True)
+                run_server.main(["--local", "--skip_server_startup", *arguments], standalone_mode=False)
+
+        assert exc_info.value.code == 1
+        mock_setup_database.assert_called_once_with(use_migrate=True, use_v2_resolver=True)
 
     @patch("subprocess.run")
     @patch("atexit.register")

@@ -10,6 +10,7 @@ Run checks for:
 """
 
 import asyncio
+import inspect
 import math
 import re
 import time
@@ -3859,7 +3860,7 @@ class ExperimentalUIJWTToken:
             key_name=session_alias,
             key_alias=session_alias,
             expires=expires,
-            max_budget=max_budget,
+            max_budget=max_budget if max_budget is not None else litellm.max_ui_session_budget,
             user_id=user_info.user_id,
             team_id=_team_id,
             team_alias=team_alias,
@@ -5895,12 +5896,12 @@ async def virtual_key_max_budget_check(
             key_alias=valid_token.key_alias,
             event_group=Litellm_EntityType.KEY,
         )
-        asyncio.create_task(
-            proxy_logging_obj.budget_alerts(
-                type="token_budget",
-                user_info=call_info,
-            )
+        budget_alert = proxy_logging_obj.budget_alerts(
+            type="token_budget",
+            user_info=call_info,
         )
+        if inspect.isawaitable(budget_alert):
+            asyncio.create_task(budget_alert)
 
         ####################################
         # collect information for alerting #

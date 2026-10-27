@@ -448,6 +448,8 @@ class RealTimeStreaming:
             )
             sent = False
             for msg in transformed:
+                if not isinstance(msg, bytes):
+                    msg = self._maybe_inject_guardrail_auto_response_disable(msg)
                 if isinstance(msg, bytes):
                     await self.provider_config.pace_backend_send(msg)
                     await self.backend_ws.send(msg)
