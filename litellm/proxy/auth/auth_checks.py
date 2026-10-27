@@ -1311,6 +1311,26 @@ async def common_checks(
                     team_membership=loaded_team_membership,
                     team_membership_loaded=team_membership_loaded,
                 ),
+                _check_user_model_group_budget(
+                    user_object=user_object,
+                    valid_token=valid_token,
+                    model=_model,
+                    llm_router=llm_router,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                ),
+                _check_team_member_model_group_budget(
+                    team_object=team_object,
+                    valid_token=valid_token,
+                    model=_model,
+                    llm_router=llm_router,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                    team_membership=loaded_team_membership,
+                    team_membership_loaded=team_membership_loaded,
+                ),
                 check_end_user_budget(end_user_obj=end_user_object, route=route)
                 if end_user_object is not None and end_user_object.litellm_budget_table is not None
                 else None,
@@ -6295,6 +6315,178 @@ async def _check_team_member_budget(
                     entity_type=Litellm_EntityType.TEAM_MEMBER.value,
                     entity_id=f"{valid_token.user_id}:{team_object.team_id}",
                 )
+
+
+def _normalize_models(model: str | list[str] | None) -> list[str]:
+    if model is None:
+        return []
+    if isinstance(model, list):
+        return [item for item in model if item]
+    return [model]
+
+
+async def get_budgeted_groups_for_model(
+    model: str,
+    model_group_max_budget: dict,
+    llm_router: Router | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging | None,
+) -> list[str]:
+    """Return budgeted access groups containing ``model``.
+
+    Access-group membership intentionally uses the same cached matcher as model
+    authorization, keeping aliases and wildcard semantics consistent with the
+    request admission path.
+    """
+    matched: list[str] = []
+    for group_id in model_group_max_budget:
+        models = await _get_models_from_access_groups(
+            access_group_ids=[group_id],
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if not models:
+            continue
+        try:
+            _can_object_call_model(
+                model=model,
+                llm_router=llm_router,
+                models=models,
+                team_model_aliases=None,
+                team_id=None,
+                object_type="key",
+            )
+        except ProxyException:
+            continue
+        matched.append(group_id)
+    return matched
+
+
+async def _check_user_model_group_budget(
+    user_object: LiteLLM_UserTable | None,
+    valid_token: UserAPIKeyAuth | None,
+    model: str | list[str] | None,
+    llm_router: Router | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> None:
+    """Enforce a user's aggregate budget for each configured model group."""
+    if user_object is None or valid_token is None or valid_token.user_id is None:
+        return
+    group_budgets = getattr(user_object, "model_group_max_budget", None)
+    if not group_budgets:
+        return
+
+    # The post-call logger increments this same user-level counter.
+    valid_token.user_model_group_max_budget = group_budgets
+
+    from litellm.proxy.proxy_server import model_max_budget_limiter
+
+    for requested_model in _normalize_models(model):
+        groups = await get_budgeted_groups_for_model(
+            model=requested_model,
+            model_group_max_budget=group_budgets,
+            llm_router=llm_router,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if groups:
+            await model_max_budget_limiter.is_user_within_model_group_budget(
+                user_id=valid_token.user_id,
+                user_model_group_max_budget=group_budgets,
+                groups=groups,
+            )
+
+
+async def _resolve_team_member_model_group_budget(
+    team_object: LiteLLM_TeamTable,
+    user_id: str,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+    team_membership: LiteLLM_TeamMembership | None = None,
+    team_membership_loaded: bool = False,
+) -> dict | None:
+    """Resolve a member override first, then the team's default budget."""
+    if not team_membership_loaded:
+        team_membership = await get_team_membership(
+            user_id=user_id,
+            team_id=team_object.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    if (
+        team_membership is not None
+        and team_membership.litellm_budget_table is not None
+        and team_membership.litellm_budget_table.model_group_max_budget
+    ):
+        return team_membership.litellm_budget_table.model_group_max_budget
+
+    default_budget_id = (team_object.metadata or {}).get("team_member_budget_id")
+    if isinstance(default_budget_id, str):
+        default_budget = await get_team_member_default_budget(
+            budget_id=default_budget_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
+        if default_budget is not None and default_budget.model_group_max_budget:
+            return default_budget.model_group_max_budget
+    return None
+
+
+async def _check_team_member_model_group_budget(
+    team_object: LiteLLM_TeamTable | None,
+    valid_token: UserAPIKeyAuth | None,
+    model: str | list[str] | None,
+    llm_router: Router | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+    team_membership: LiteLLM_TeamMembership | None = None,
+    team_membership_loaded: bool = False,
+) -> None:
+    """Enforce a member's model-group budget within its team."""
+    if team_object is None or team_object.team_id is None or valid_token is None or valid_token.user_id is None:
+        return
+
+    group_budgets = await _resolve_team_member_model_group_budget(
+        team_object=team_object,
+        user_id=valid_token.user_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        team_membership=team_membership,
+        team_membership_loaded=team_membership_loaded,
+    )
+    if not group_budgets:
+        return
+
+    # The post-call logger increments this same team-member-level counter.
+    valid_token.team_member_model_group_max_budget = group_budgets
+
+    from litellm.proxy.proxy_server import model_max_budget_limiter
+
+    for requested_model in _normalize_models(model):
+        groups = await get_budgeted_groups_for_model(
+            model=requested_model,
+            model_group_max_budget=group_budgets,
+            llm_router=llm_router,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if groups:
+            await model_max_budget_limiter.is_team_member_within_model_group_budget(
+                user_id=valid_token.user_id,
+                team_id=team_object.team_id,
+                team_member_model_group_max_budget=group_budgets,
+                groups=groups,
+            )
 
 
 async def check_team_member_model_access(

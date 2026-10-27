@@ -2333,6 +2333,18 @@ class TestRunServerDbSetup:
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.build_request_log_indexes")
     @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
+    @pytest.mark.parametrize(
+        ("arguments", "env", "exits"),
+        [
+            ((), {}, True),
+            (("--enforce_prisma_migration_check",), {}, True),
+            ((), {"ENFORCE_PRISMA_MIGRATION_CHECK": "true"}, True),
+            (("--no-enforce_prisma_migration_check",), {}, True),
+            ((), {"ENFORCE_PRISMA_MIGRATION_CHECK": "false"}, True),
+            ((), {"ENFORCE_PRISMA_MIGRATION_CHECK": "0"}, True),
+        ],
+        ids=("default", "flag", "env-true", "no-flag", "env-false", "env-0"),
+    )
     @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
     def test_startup_fails_when_db_setup_fails(
         self,

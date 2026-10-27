@@ -116,6 +116,20 @@ class StandardBuiltInToolCostTracking:
 
     @staticmethod
     def _resolve_model_info(model: str, custom_llm_provider: str | None) -> tuple[ModelInfo | None, str | None]:
+        # A model key that already carries a provider prefix must take precedence
+        # over a conflicting transport provider. Otherwise provider-specific
+        # fallback generalizations can fabricate, for example, a Vertex Gemini
+        # entry for an OpenRouter model and charge the wrong tool pricing.
+        if "/" in model:
+            try:
+                _, prefixed_provider, _, _ = litellm.get_llm_provider(model=model)
+            except Exception:  # noqa: BLE001  # unknown prefixes retain the caller's provider behavior
+                prefixed_provider = None
+            if prefixed_provider is not None and prefixed_provider != custom_llm_provider:
+                by_prefix: Final = StandardBuiltInToolCostTracking._safe_get_model_info(model=model)
+                if by_prefix is not None:
+                    return by_prefix, by_prefix["litellm_provider"]
+
         direct: Final = StandardBuiltInToolCostTracking._safe_get_model_info(
             model=model, custom_llm_provider=custom_llm_provider
         )
