@@ -3,7 +3,7 @@ Helper utilities for tracking the cost of built-in tools.
 """
 
 from collections.abc import Mapping
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
 from pydantic import ValidationError
 
@@ -116,6 +116,20 @@ class StandardBuiltInToolCostTracking:
 
     @staticmethod
     def _resolve_model_info(model: str, custom_llm_provider: str | None) -> tuple[ModelInfo | None, str | None]:
+        # A model key that already carries a provider prefix must take precedence
+        # over a conflicting transport provider. Otherwise provider-specific
+        # fallback generalizations can fabricate, for example, a Vertex Gemini
+        # entry for an OpenRouter model and charge the wrong tool pricing.
+        if "/" in model:
+            try:
+                _, prefixed_provider, _, _ = litellm.get_llm_provider(model=model)
+            except Exception:  # noqa: BLE001  # unknown prefixes retain the caller's provider behavior
+                prefixed_provider = None
+            if prefixed_provider is not None and prefixed_provider != custom_llm_provider:
+                by_prefix: Final = StandardBuiltInToolCostTracking._safe_get_model_info(model=model)
+                if by_prefix is not None:
+                    return by_prefix, by_prefix["litellm_provider"]
+
         direct: Final = StandardBuiltInToolCostTracking._safe_get_model_info(
             model=model, custom_llm_provider=custom_llm_provider
         )
@@ -739,9 +753,10 @@ class StandardBuiltInToolCostTracking:
         return False
 
     @staticmethod
-    def _get_web_search_options(kwargs: dict) -> WebSearchOptions | None:
+    def get_web_search_options(kwargs: Mapping[str, object]) -> WebSearchOptions | None:
         if "web_search_options" in kwargs:
-            return WebSearchOptions(**kwargs.get("web_search_options", {}))
+            web_search_options: Final = cast(WebSearchOptions, kwargs.get("web_search_options", {}))
+            return WebSearchOptions(**web_search_options)
 
         tools: Final = StandardBuiltInToolCostTracking._get_tools_from_kwargs(
             kwargs=kwargs, tool_type="web_search_preview"
@@ -751,27 +766,31 @@ class StandardBuiltInToolCostTracking:
             for tool in tools:
                 if isinstance(tool, dict):
                     if StandardBuiltInToolCostTracking._is_web_search_tool_call(tool):
-                        return WebSearchOptions(**tool)
+                        return WebSearchOptions(**cast(WebSearchOptions, tool))
         return None
 
+    _get_web_search_options = get_web_search_options
+
     @staticmethod
-    def _get_tools_from_kwargs(kwargs: dict, tool_type: str) -> list[dict] | None:
+    def _get_tools_from_kwargs(kwargs: Mapping[str, object], tool_type: str) -> list[object] | None:
         if "tools" in kwargs:
-            return kwargs.get("tools", [])
+            return cast(list[object], kwargs.get("tools", []))
         return None
 
     @staticmethod
-    def _get_file_search_tool_call(kwargs: dict) -> FileSearchTool | None:
+    def get_file_search_tool_call(kwargs: Mapping[str, object]) -> FileSearchTool | None:
         tools: Final = StandardBuiltInToolCostTracking._get_tools_from_kwargs(kwargs, "file_search")
         if tools:
             for tool in tools:
                 if isinstance(tool, dict):
                     if StandardBuiltInToolCostTracking._is_file_search_tool_call(tool):
-                        return FileSearchTool(**tool)
+                        return FileSearchTool(**cast(FileSearchTool, tool))
         return None
 
+    _get_file_search_tool_call = get_file_search_tool_call
+
     @staticmethod
-    def _is_web_search_tool_call(tool: dict) -> bool:
+    def _is_web_search_tool_call(tool: Mapping[str, object]) -> bool:
         if tool.get("type", None) == "web_search_preview":
             return True
         if tool.get("type", None) == "web_search":
@@ -781,7 +800,7 @@ class StandardBuiltInToolCostTracking:
         return False
 
     @staticmethod
-    def _is_file_search_tool_call(tool: dict) -> bool:
+    def _is_file_search_tool_call(tool: Mapping[str, object]) -> bool:
         if tool.get("type", None) == "file_search":
             return True
         return False

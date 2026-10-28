@@ -76,6 +76,8 @@ class ProviderConnection:
     request_timeout: float | None = None
     force_timeout: float | None = None
     stream_timeout: float | str | None = None
+    timeout_by_service_tier: Mapping[str, float] | None = None
+    stream_timeout_by_service_tier: Mapping[str, float] | None = None
     max_retries: int | None = None
     tenant_id: str | None = None
     client_id: str | None = None
@@ -87,6 +89,7 @@ class ProviderConnection:
     litellm_credential_name: str | None = None
     configurable_clientside_auth_params: "Sequence[str | ConfigurableClientsideParamsCustomAuth] | None" = None
     use_xai_oauth: bool | None = None
+    fireworks_forward_user_id: bool | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -105,9 +108,40 @@ class BedrockBatchConnection:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class AnthropicFederationConnection:
+    anthropic_federation_rule_id: str | None = None
+    anthropic_organization_id: str | None = None
+    anthropic_service_account_id: str | None = None
+    anthropic_federation_workspace_id: str | None = None
+    anthropic_identity_token_file: str | None = None
+    anthropic_identity_token: str | None = None
+    anthropic_identity_source: str | None = None
+    anthropic_issuer_url: str | None = None
+    anthropic_issuer_subject: str | None = None
+    anthropic_issuer_audience: str | None = None
+    anthropic_issuer_ttl_seconds: int | None = None
+    anthropic_issuer_signing_key_ref: str | None = None
+    anthropic_keycloak_token_url: str | None = None
+    anthropic_keycloak_client_id: str | None = None
+    anthropic_keycloak_auth_method: str | None = None
+    anthropic_keycloak_client_secret_ref: str | None = None
+    anthropic_keycloak_scope: str | None = None
+    anthropic_disable_workload_identity_federation: bool | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class OpenAIFederationConnection:
+    openai_identity_provider_id: str | None = None
+    openai_service_account_id: str | None = None
+    openai_identity_token_file: str | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class ConnectionSettings:
     provider: ProviderConnection
     bedrock_batch: BedrockBatchConnection
+    anthropic_federation: AnthropicFederationConnection
+    openai_federation: OpenAIFederationConnection
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

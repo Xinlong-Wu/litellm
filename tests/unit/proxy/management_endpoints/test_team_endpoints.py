@@ -40,7 +40,7 @@ from litellm.proxy._types import (
     UpdateTeamRequest,
     UserAPIKeyAuth,  # Import UserAPIKeyAuth
 )
-from litellm.proxy.management.teams.access import TeamAccess
+from litellm.proxy.management.teams.authz import TeamAccess
 from litellm.proxy.management_endpoints.team_endpoints import (
     _STRIP_DELETED_TEAM_FROM_USERS_SQL,
     GetTeamMemberPermissionsResponse,
@@ -80,6 +80,7 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
     TeamMemberAddResult,
 )
 from litellm.types.utils import StandardAuditLogPayload
+from tests._master_key import MASTER_KEY
 from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
     CascadingJWTMappingTable,
     JWTMappingRow,
@@ -2312,7 +2313,7 @@ async def test_team_model_add_delete_refresh_team_cache(endpoint_name):
         patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache,
         patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
         patch(
-            "litellm.proxy.management_endpoints.team_endpoints._cache_team_object",
+            "litellm.proxy.management_endpoints.team_endpoints.cache_team_object",
             new_callable=AsyncMock,
         ) as mock_cache_team,
     ):
@@ -2491,7 +2492,7 @@ async def test_team_write_404s_when_row_vanishes_before_update(endpoint_name):
         patch("litellm.proxy.proxy_server.user_api_key_cache"),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
         patch("litellm.proxy.proxy_server.proxy_logging_obj"),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
         patch(  # test-quality-ok: stubs the cache write so the test observes only the DB result handling
-            "litellm.proxy.management_endpoints.team_endpoints._cache_team_object",
+            "litellm.proxy.management_endpoints.team_endpoints.cache_team_object",
             new_callable=AsyncMock,
         ),
         patch(  # test-quality-ok: stubs the collaborator so the test pins the endpoint's own error contract
@@ -2544,7 +2545,8 @@ async def test_update_team_team_member_budget_not_passed_to_db(
         patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
         patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
         patch(
-            "litellm.proxy.management_endpoints.team_endpoints._cache_team_object"
+            "litellm.proxy.management_endpoints.team_endpoints.cache_team_object",
+            new_callable=AsyncMock,
         ) as mock_cache_team,
         patch(
             "litellm.proxy.management_endpoints.team_endpoints.TeamMemberBudgetHandler.upsert_team_member_budget_table"
@@ -3114,7 +3116,8 @@ async def test_update_team_with_team_member_budget_duration(
         patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
         patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
         patch(
-            "litellm.proxy.management_endpoints.team_endpoints._cache_team_object"
+            "litellm.proxy.management_endpoints.team_endpoints.cache_team_object",
+            new_callable=AsyncMock,
         ) as mock_cache_team,
         patch(
             "litellm.proxy.management_endpoints.team_endpoints.TeamMemberBudgetHandler.upsert_team_member_budget_table"
@@ -8420,6 +8423,7 @@ async def test_update_team_org_scoped_tpm_rpm_bypasses_user_limit(
         # Mock team update
         mock_updated_team = MagicMock(spec=LiteLLM_TeamTable)
         mock_updated_team.team_id = "org-team-update-bypass-123"
+        mock_updated_team.object_permission_id = None
         mock_updated_team.tpm_limit = 10000
         mock_updated_team.rpm_limit = 1000
         mock_updated_team.access_group_ids = None
@@ -8573,6 +8577,7 @@ async def test_update_team_guardrails_with_org_id(
         # Mock team update
         mock_updated_team = MagicMock(spec=LiteLLM_TeamTable)
         mock_updated_team.team_id = "team-guardrails-123"
+        mock_updated_team.object_permission_id = None
         mock_updated_team.organization_id = "test-org-guardrails"
         mock_updated_team.metadata = {
             "guardrails": ["aporia-pre-call", "aporia-post-call"]
@@ -11538,25 +11543,25 @@ def _non_admin_auth():
 def test_check_passthrough_routes_caller_permission_team():
     from litellm.proxy._types import NewTeamRequest
     from litellm.proxy.management_endpoints.common_utils import (
-        _check_passthrough_routes_caller_permission,
+        check_passthrough_routes_caller_permission,
     )
 
     admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
     non_admin = _non_admin_auth()
 
-    _check_passthrough_routes_caller_permission(
+    check_passthrough_routes_caller_permission(
         NewTeamRequest(allowed_passthrough_routes=["/foo/*"]), admin, entity="team"
     )
 
-    _check_passthrough_routes_caller_permission(
+    check_passthrough_routes_caller_permission(
         NewTeamRequest(), non_admin, entity="team"
     )
-    _check_passthrough_routes_caller_permission(
+    check_passthrough_routes_caller_permission(
         NewTeamRequest(allowed_passthrough_routes=[]), non_admin, entity="team"
     )
 
     with pytest.raises(HTTPException) as exc:
-        _check_passthrough_routes_caller_permission(
+        check_passthrough_routes_caller_permission(
             NewTeamRequest(allowed_passthrough_routes=["/admin/*"]),
             non_admin,
             entity="team",
@@ -11566,7 +11571,7 @@ def test_check_passthrough_routes_caller_permission_team():
     assert "team" in str(exc.value.detail)
 
     with pytest.raises(HTTPException) as exc:
-        _check_passthrough_routes_caller_permission(
+        check_passthrough_routes_caller_permission(
             NewTeamRequest(metadata={"allowed_passthrough_routes": ["/admin/*"]}),
             non_admin,
             entity="team",
@@ -11629,24 +11634,24 @@ async def test_update_team_blocks_non_admin_passthrough_routes(mock_db_client):
 def test_check_disable_global_guardrails_caller_permission_team():
     from litellm.proxy._types import NewTeamRequest
     from litellm.proxy.management_endpoints.common_utils import (
-        _check_disable_global_guardrails_caller_permission,
+        check_disable_global_guardrails_caller_permission,
     )
 
     admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
     non_admin = _non_admin_auth()
 
-    _check_disable_global_guardrails_caller_permission(True, {"disable_global_guardrails": True}, admin, entity="team")
-    _check_disable_global_guardrails_caller_permission(None, None, non_admin, entity="team")
-    _check_disable_global_guardrails_caller_permission(False, None, non_admin, entity="team")
+    check_disable_global_guardrails_caller_permission(True, {"disable_global_guardrails": True}, admin, entity="team")
+    check_disable_global_guardrails_caller_permission(None, None, non_admin, entity="team")
+    check_disable_global_guardrails_caller_permission(False, None, non_admin, entity="team")
 
     with pytest.raises(HTTPException) as exc:
-        _check_disable_global_guardrails_caller_permission(True, None, non_admin, entity="team")
+        check_disable_global_guardrails_caller_permission(True, None, non_admin, entity="team")
     assert exc.value.status_code == 403
     assert "disable_global_guardrails" in str(exc.value.detail)
     assert "team" in str(exc.value.detail)
 
     with pytest.raises(HTTPException) as exc:
-        _check_disable_global_guardrails_caller_permission(
+        check_disable_global_guardrails_caller_permission(
             None, {"disable_global_guardrails": True}, non_admin, entity="team"
         )
     assert exc.value.status_code == 403
@@ -11763,7 +11768,7 @@ async def test_clear_team_member_budget_duration_calls_update_budget():
 
     mock_user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
-        api_key="sk-1234",
+        api_key=MASTER_KEY,
         user_id="admin-user",
     )
 
@@ -11811,7 +11816,7 @@ async def test_clear_team_member_budget_clears_max_budget():
 
     mock_user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
-        api_key="sk-1234",
+        api_key=MASTER_KEY,
         user_id="admin-user",
     )
 
@@ -11857,7 +11862,7 @@ async def test_clear_team_member_rpm_tpm_limits():
 
     mock_user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
-        api_key="sk-1234",
+        api_key=MASTER_KEY,
         user_id="admin-user",
     )
 
@@ -11907,7 +11912,7 @@ async def test_clear_all_team_member_fields_at_once():
 
     mock_user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
-        api_key="sk-1234",
+        api_key=MASTER_KEY,
         user_id="admin-user",
     )
 
@@ -11994,7 +11999,7 @@ async def test_clear_team_member_budget_fields_no_budget_row_skips_update():
 
     mock_user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
-        api_key="sk-1234",
+        api_key=MASTER_KEY,
         user_id="admin-user",
     )
 
@@ -12377,7 +12382,7 @@ async def _drive_team_write(
         _patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
         _patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
         _patch(
-            "litellm.proxy.management_endpoints.team_endpoints._refresh_cached_team",
+            "litellm.proxy.management_endpoints.team_endpoints.refresh_cached_team",
             new=AsyncMock(),
         ),
     ):
@@ -13178,7 +13183,7 @@ def test_get_team_metadata_schema_route_requires_auth():
         parse_team_metadata_schema,
     )
 
-    with patch("litellm.proxy.proxy_server.master_key", "sk-1234"):
+    with patch("litellm.proxy.proxy_server.master_key", MASTER_KEY):
         response = client.get("/team/metadata_schema")
     assert response.status_code == 401
 
@@ -13861,7 +13866,7 @@ async def test_team_member_update_role_change_emits_a_roster_audit_event(monkeyp
             AsyncMock(side_effect=[_team_info_as_read_from_db("user"), _team_info_as_read_from_db("admin")]),
         ),
         patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
-            "litellm.proxy.management_endpoints.team_endpoints._upsert_budget_and_membership",
+            "litellm.proxy.management_endpoints.team_endpoints.upsert_budget_and_membership",
             AsyncMock(),
         ),
     ):
@@ -13918,7 +13923,7 @@ def _member_update_patches(team_snapshot: LiteLLM_TeamTable):
             ),
         ),
         patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
-            "litellm.proxy.management_endpoints.team_endpoints._upsert_budget_and_membership",
+            "litellm.proxy.management_endpoints.team_endpoints.upsert_budget_and_membership",
             AsyncMock(),
         ),
     )
@@ -14440,7 +14445,12 @@ def _wire_update_team(stack, existing_metadata):
     stack.enter_context(patch("litellm.proxy.proxy_server.user_api_key_cache"))
     stack.enter_context(patch("litellm.proxy.proxy_server.proxy_logging_obj"))
     stack.enter_context(patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"))
-    stack.enter_context(patch("litellm.proxy.management_endpoints.team_endpoints._cache_team_object"))
+    stack.enter_context(
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.cache_team_object",
+            new_callable=AsyncMock,
+        )
+    )
 
     existing_team = MagicMock()
     existing_team.metadata = existing_metadata
@@ -14844,7 +14854,10 @@ async def test_update_team_syncs_access_group_assigned_team_ids_in_both_directio
         patch("litellm.proxy.proxy_server.user_api_key_cache"),
         patch("litellm.proxy.proxy_server.proxy_logging_obj"),
         patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
-        patch("litellm.proxy.management_endpoints.team_endpoints._refresh_cached_team"),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.refresh_cached_team",
+            new_callable=AsyncMock,
+        ),
         patch(
             "litellm.proxy.management_helpers.access_group_team_sync.invalidate_access_group_cache",
             new_callable=AsyncMock,
@@ -15038,7 +15051,7 @@ async def test_invalidate_access_group_cache_deletes_the_cached_object():
         patch("litellm.proxy.proxy_server.user_api_key_cache", cache),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", logging_obj),
         patch(
-            "litellm.proxy.management_helpers.access_group_team_sync._delete_cache_access_object",
+            "litellm.proxy.management_helpers.access_group_team_sync.delete_cache_access_object",
             new_callable=AsyncMock,
         ) as delete_cached,
     ):
@@ -15570,7 +15583,7 @@ async def test_team_member_update_invalidates_team_member_spend_state_when_budge
             AsyncMock(return_value=team_info_response),
         ),
         patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
-            "litellm.proxy.management_endpoints.team_endpoints._upsert_budget_and_membership",
+            "litellm.proxy.management_endpoints.team_endpoints.upsert_budget_and_membership",
             AsyncMock(),
         ),
     ):
@@ -15623,7 +15636,7 @@ async def test_team_member_update_skips_invalidation_when_no_budget_fields_sent(
             AsyncMock(return_value=team_info_response),
         ),
         patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
-            "litellm.proxy.management_endpoints.team_endpoints._upsert_budget_and_membership",
+            "litellm.proxy.management_endpoints.team_endpoints.upsert_budget_and_membership",
             AsyncMock(),
         ),
     ):

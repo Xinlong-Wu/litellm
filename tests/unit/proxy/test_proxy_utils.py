@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Final, List, Optional, Union
 from unittest.mock import Mock
 
 import pytest
@@ -10,7 +10,7 @@ from fastapi import HTTPException, Request
 from starlette.datastructures import State
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.proxy.utils import _get_docs_url, _get_openapi_url, _get_redoc_url
+from litellm.proxy.utils import get_docs_url, get_openapi_url, get_redoc_url
 from litellm.types.guardrails import GuardrailEventHooks
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -22,7 +22,7 @@ from litellm.proxy.auth.auth_utils import (
     is_request_body_safe,
 )
 from litellm.proxy.litellm_pre_call_utils import (
-    _get_dynamic_logging_metadata,
+    get_dynamic_logging_metadata,
     add_litellm_data_to_request,
 )
 from pydantic import ValidationError
@@ -262,7 +262,9 @@ def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
         rpm_limit_per_model=None,
         tpm_limit_per_model=None,
     )
-    callbacks = _get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict, proxy_config=proxy_config)
+    callbacks = get_dynamic_logging_metadata(
+        user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
+    )
 
     assert callbacks is not None
 
@@ -298,7 +300,9 @@ def test_dynamic_logging_metadata_ignores_env_references_from_key_metadata(
         team_metadata={},
     )
 
-    callbacks = _get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict, proxy_config=proxy_config)
+    callbacks = get_dynamic_logging_metadata(
+        user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
+    )
 
     assert callbacks is None
 
@@ -374,7 +378,9 @@ def test_dynamic_turn_off_message_logging(callback_vars):
         rpm_limit_per_model=None,
         tpm_limit_per_model=None,
     )
-    callbacks = _get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict, proxy_config=proxy_config)
+    callbacks = get_dynamic_logging_metadata(
+        user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
+    )
 
     assert callbacks is not None
     # AddTeamCallback's validator stringifies callback_var values, so compare
@@ -702,7 +708,7 @@ def test_get_redoc_url(env_vars, expected_url, monkeypatch):
     for key, value in env_vars.items():
         monkeypatch.setenv(key, value)
 
-    result = _get_redoc_url()
+    result = get_redoc_url()
     assert result == expected_url
 
 
@@ -727,7 +733,7 @@ def test_get_docs_url(env_vars, expected_url, monkeypatch):
     for key, value in env_vars.items():
         monkeypatch.setenv(key, value)
 
-    result = _get_docs_url()
+    result = get_docs_url()
     assert result == expected_url
 
 
@@ -752,7 +758,7 @@ def test_get_openapi_url(env_vars, expected_url, monkeypatch):
     for key, value in env_vars.items():
         monkeypatch.setenv(key, value)
 
-    result = _get_openapi_url()
+    result = get_openapi_url()
     assert result == expected_url
 
 
@@ -1478,7 +1484,7 @@ def test_is_allowed_to_make_key_request():
 
 def test_get_model_group_info():
     from litellm import Router
-    from litellm.proxy.proxy_server import _get_model_group_info
+    from litellm.proxy.proxy_server import get_model_group_info
 
     router = Router(
         model_list=[
@@ -1486,19 +1492,19 @@ def test_get_model_group_info():
                 "model_name": "openai/tts-1",
                 "litellm_params": {
                     "model": "openai/tts-1",
-                    "api_key": "sk-1234",
+                    "api_key": "sk-9876",
                 },
             },
             {
                 "model_name": "openai/gpt-3.5-turbo",
                 "litellm_params": {
                     "model": "openai/gpt-3.5-turbo",
-                    "api_key": "sk-1234",
+                    "api_key": "sk-9876",
                 },
             },
         ]
     )
-    model_list = _get_model_group_info(
+    model_list = get_model_group_info(
         llm_router=router,
         all_models_str=["openai/tts-1", "openai/gpt-3.5-turbo"],
         model_group="openai/tts-1",
@@ -3171,3 +3177,22 @@ def test_handle_exception_on_proxy_preserves_auth_error_status_code():
     result = handle_exception_on_proxy(auth_error)
 
     assert int(result.code) == 401, f"Expected 401, got {result.code}"
+
+
+class _RedisDown:
+    async def async_delete_cache(self, key: str) -> None:
+        raise ConnectionError("redis is down")
+
+
+async def test_evict_config_param_clears_the_local_layer_and_survives_a_redis_outage() -> None:
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import _config_cache_key, evict_config_param
+
+    cache: Final = DualCache(redis_cache=_RedisDown())
+    await cache.in_memory_cache.async_set_cache(
+        _config_cache_key("router_settings"), {"param_name": "router_settings", "param_value": {"fallbacks": []}}
+    )
+
+    await evict_config_param("router_settings", cache=cache)
+
+    assert await cache.in_memory_cache.async_get_cache(_config_cache_key("router_settings")) is None

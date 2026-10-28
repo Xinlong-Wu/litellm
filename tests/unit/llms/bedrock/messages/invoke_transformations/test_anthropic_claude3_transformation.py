@@ -36,6 +36,8 @@ from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_tran
     AmazonAnthropicClaudeMessagesConfig,
     AmazonAnthropicClaudeMessagesStreamDecoder,
 )
+from litellm.llms.bedrock.messages.mantle_transformation import AmazonMantleMessagesConfig
+from litellm.llms.bedrock_mantle.messages.transformation import BedrockMantleAnthropicMessagesConfig
 
 
 @pytest.mark.asyncio
@@ -241,7 +243,7 @@ def test_chunk_parser_usage_transformation():
         },
     }
 
-    parsed = decoder._chunk_parser(chunk.copy())  # use copy to avoid side-effects
+    parsed = decoder.chunk_parser(chunk.copy())  # use copy to avoid side-effects
 
     # The invocation metrics key should be removed and replaced by `usage`
     assert "amazon-bedrock-invocationMetrics" not in parsed
@@ -274,7 +276,7 @@ def test_chunk_parser_preserves_cache_usage_fields_with_invocation_metrics():
         },
     }
 
-    parsed = decoder._chunk_parser(chunk.copy())
+    parsed = decoder.chunk_parser(chunk.copy())
 
     assert "amazon-bedrock-invocationMetrics" not in parsed
     assert parsed["usage"]["cache_read_input_tokens"] == 9821
@@ -298,7 +300,7 @@ def test_chunk_parser_maps_cache_token_counts_from_invocation_metrics():
         },
     }
 
-    parsed = decoder._chunk_parser(chunk.copy())
+    parsed = decoder.chunk_parser(chunk.copy())
 
     assert parsed["usage"]["input_tokens"] == 10174
     assert parsed["usage"]["output_tokens"] == 500
@@ -324,7 +326,7 @@ def test_chunk_parser_keeps_existing_token_counts_over_invocation_metrics():
         },
     }
 
-    parsed = decoder._chunk_parser(chunk.copy())
+    parsed = decoder.chunk_parser(chunk.copy())
 
     assert parsed["usage"]["input_tokens"] == 7
     assert parsed["usage"]["output_tokens"] == 11
@@ -383,7 +385,7 @@ async def test_bedrock_sse_wrapper_preserves_cache_usage_with_invocation_metrics
 
     async def _decoded_stream():  # type: ignore[return-type]
         for chunk in raw_chunks:
-            yield decoder._chunk_parser(copy.deepcopy(chunk))
+            yield decoder.chunk_parser(copy.deepcopy(chunk))
 
     collected: list[bytes] = []
     async for chunk in cfg.bedrock_sse_wrapper(
@@ -1676,7 +1678,7 @@ def test_bedrock_messages_stream_decoder_keeps_safeguard_results():
     tool_verdicts = {"toolu_01": {"type": "evaluated", "outcome": "not_flagged"}}
     safeguard_results = [{"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": tool_verdicts}}]
 
-    message_start = decoder._chunk_parser(
+    message_start = decoder.chunk_parser(
         {
             "type": "message_start",
             "message": {
@@ -1695,7 +1697,7 @@ def test_bedrock_messages_stream_decoder_keeps_safeguard_results():
     assert isinstance(message_start, dict)
     assert message_start["message"]["safeguard_results"] == safeguard_results
 
-    message_delta = decoder._chunk_parser(
+    message_delta = decoder.chunk_parser(
         {
             "type": "message_delta",
             "delta": {"stop_reason": "end_turn", "stop_sequence": None, "safeguard_results": safeguard_results},
@@ -3527,6 +3529,94 @@ def test_bedrock_clear_thinking_preserves_display_updates() -> None:
 
     assert result.get("thinking") == {"type": "adaptive", "display": "updates"}
     assert ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER in result.get("anthropic_beta", [])
+
+
+BLOCK_BINDING: Final = {"prefix_mismatch_behavior": "error"}
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("model", "requested_thinking", "extra_params"),
+    (
+        (
+            "eu.anthropic.claude-opus-5",
+            {"type": "adaptive", "display": "updates", "block_binding": BLOCK_BINDING, "future_key": 1},
+            {},
+        ),
+        (
+            "eu.anthropic.claude-opus-5",
+            {
+                "type": "enabled",
+                "budget_tokens": 24000,
+                "display": "updates",
+                "block_binding": BLOCK_BINDING,
+                "future_key": 1,
+            },
+            {},
+        ),
+        (
+            "us.anthropic.claude-opus-4-6",
+            {
+                "type": "enabled",
+                "budget_tokens": 2048,
+                "display": "updates",
+                "block_binding": BLOCK_BINDING,
+                "future_key": 1,
+            },
+            {"context_management": {"edits": [{"type": "clear_thinking_20251015"}]}},
+        ),
+    ),
+    ids=("adaptive", "legacy", "legacy_clear_thinking"),
+)
+def test_bedrock_messages_keeps_block_binding_with_display_updates(
+    model: str, requested_thinking: dict[str, object], extra_params: dict[str, object]
+) -> None:
+    from litellm.types.router import GenericLiteLLMParams
+
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "Reply with OK"}],
+        anthropic_messages_optional_request_params={"max_tokens": 512, "thinking": requested_thinking, **extra_params},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("thinking") == {"type": "adaptive", "display": "updates", "block_binding": BLOCK_BINDING}
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize(
+    "config_class",
+    (AmazonMantleMessagesConfig, BedrockMantleAnthropicMessagesConfig),
+    ids=("bedrock_mantle_route", "bedrock_mantle_provider"),
+)
+@pytest.mark.parametrize(
+    ("requested_thinking", "extra_params"),
+    (
+        ({"type": "adaptive", "display": "updates", "block_binding": BLOCK_BINDING, "future_key": 1}, {}),
+        (
+            {"type": "enabled", "budget_tokens": 2048, "display": "updates", "block_binding": BLOCK_BINDING},
+            {"context_management": {"edits": [{"type": "clear_thinking_20251015"}]}},
+        ),
+    ),
+    ids=("adaptive", "legacy_clear_thinking"),
+)
+def test_bedrock_mantle_messages_rebuilds_display_updates_without_block_binding(
+    config_class: type[AmazonMantleMessagesConfig],
+    requested_thinking: dict[str, object],
+    extra_params: dict[str, object],
+) -> None:
+    from litellm.types.router import GenericLiteLLMParams
+
+    result: Final = config_class().transform_anthropic_messages_request(
+        model="anthropic.claude-opus-4-8",
+        messages=[{"role": "user", "content": "Reply with OK"}],
+        anthropic_messages_optional_request_params={"max_tokens": 512, "thinking": requested_thinking, **extra_params},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("thinking") == {"type": "adaptive", "display": "updates"}
 
 
 @pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")

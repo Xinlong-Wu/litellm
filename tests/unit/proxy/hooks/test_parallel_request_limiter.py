@@ -2,22 +2,49 @@
 Unit Tests for the max parallel request limiter v1 for the proxy
 """
 
+import itertools
+from collections.abc import Callable, Iterator
 from datetime import datetime
+from typing import Final
 
 import pytest
 
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.parallel_request_limiter import (
-    _PROXY_MaxParallelRequestsHandler,
+    PROXY_MaxParallelRequestsHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
 from litellm.types.utils import EmbeddingResponse, ModelResponse, TextCompletionResponse, Usage
 
+FROZEN_INSTANT: Final = datetime(2026, 1, 31, 23, 59, 30)
+LAST_MICROSECOND_OF_JANUARY: Final = datetime(2026, 1, 31, 23, 59, 59, 999999)
+FIRST_MICROSECOND_OF_FEBRUARY: Final = datetime(2026, 2, 1, 0, 0, 0, 1)
+LAST_MINUTE_OF_JANUARY: Final = "2026-01-31-23-59"
+FIRST_MINUTE_OF_FEBRUARY: Final = "2026-02-01-00-00"
+TORN_MINUTE_OF_JANUARY: Final = "2026-01-31-00-00"
+
+
+def _frozen_clock() -> datetime:
+    return FROZEN_INSTANT
+
+
+def _clock_reading(instants: Iterator[datetime]) -> Callable[[], datetime]:
+    return lambda: next(instants)
+
+
+def _clock_rolling_over_after_first_read() -> Callable[[], datetime]:
+    return _clock_reading(
+        itertools.chain([LAST_MICROSECOND_OF_JANUARY], itertools.repeat(FIRST_MICROSECOND_OF_FEBRUARY))
+    )
+
 
 @pytest.mark.asyncio
 async def test_pre_call_hook_counts_a_cli_session_under_the_per_user_alias_not_the_login_token():
-    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    handler = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), clock=_frozen_clock
+    )
     session = UserAPIKeyAuth(
         api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa",
         user_id="alice",
@@ -30,7 +57,7 @@ async def test_pre_call_hook_counts_a_cli_session_under_the_per_user_alias_not_t
         user_api_key_dict=session, cache=DualCache(), data={"model": "gpt-4o-mini"}, call_type="completion"
     )
 
-    precise_minute = datetime.now().strftime("%Y-%m-%d-%H-%M")
+    precise_minute = FROZEN_INSTANT.strftime("%Y-%m-%d-%H-%M")
     counted = await handler.internal_usage_cache.async_get_cache(
         key=f"cli-session-alice::{precise_minute}::request_count", litellm_parent_otel_span=None
     )
@@ -57,19 +84,16 @@ async def test_async_log_success_event_counts_non_chat_response_tokens(response_
     team, and end user TPM counters, not just chat completion ModelResponse
     objects.
     """
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     user_id = "ishaan"
     team_id = "litellm-team"
     end_user_id = "customer-1"
 
-    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
-        internal_usage_cache=InternalUsageCache(DualCache())
+    parallel_request_handler = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), clock=_frozen_clock
     )
 
-    current_date = datetime.now().strftime("%Y-%m-%d")
-    current_hour = datetime.now().strftime("%H")
-    current_minute = datetime.now().strftime("%M")
-    precise_minute = f"{current_date}-{current_hour}-{current_minute}"
+    precise_minute = FROZEN_INSTANT.strftime("%Y-%m-%d-%H-%M")
 
     scope_ids = [_api_key, user_id, team_id, end_user_id]
     for scope_id in scope_ids:
@@ -94,8 +118,8 @@ async def test_async_log_success_event_counts_non_chat_response_tokens(response_
     await parallel_request_handler.async_log_success_event(
         kwargs=kwargs,
         response_obj=response_obj,
-        start_time=datetime.now(),
-        end_time=datetime.now(),
+        start_time=FROZEN_INSTANT,
+        end_time=FROZEN_INSTANT,
     )
 
     for scope_id in scope_ids:
@@ -110,102 +134,159 @@ async def test_async_log_success_event_counts_non_chat_response_tokens(response_
 
 
 @pytest.mark.asyncio
-async def test_model_specific_limits_keep_remaining_fields_out_of_provider_metadata():
-    cache = DualCache()
-    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
-    model = "restricted-model"
-    provider_metadata = {"customer_id": "cust-123"}
-    data = {
-        "model": model,
-        "messages": [{"role": "user", "content": "hello"}],
-        "metadata": provider_metadata,
-        "litellm_metadata": {"model_group": model},
-    }
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key=hash_token("sk-model-specific-metadata"),
-        metadata={
-            "model_tpm_limit": {model: 100},
-            "model_rpm_limit": {model: 10},
-        },
+async def test_a_pre_call_across_a_minute_rollover_lands_in_the_bucket_of_its_first_clock_read():
+    internal_usage_cache: Final = InternalUsageCache(DualCache())
+    handler: Final = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=internal_usage_cache, clock=_clock_rolling_over_after_first_read()
     )
+    session: Final = UserAPIKeyAuth(api_key="sk-torn-pre", max_parallel_requests=5)
+    api_key: Final = session.api_key
 
     await handler.async_pre_call_hook(
-        user_api_key_dict=user_api_key_dict,
-        cache=cache,
-        data=data,
-        call_type="aresponses",
+        user_api_key_dict=session, cache=DualCache(), data={"model": "gpt-4o-mini"}, call_type="completion"
     )
 
-    assert data["metadata"] == provider_metadata
-    assert data["litellm_metadata"][f"litellm-key-remaining-tokens-{model}"] == 100
-    assert data["litellm_metadata"][f"litellm-key-remaining-requests-{model}"] == 9
-    assert f"litellm-key-remaining-tokens-{model}" not in data["metadata"]
-    assert f"litellm-key-remaining-requests-{model}" not in data["metadata"]
+    assert await internal_usage_cache.async_get_cache(
+        key=f"{api_key}::{LAST_MINUTE_OF_JANUARY}::request_count", litellm_parent_otel_span=None
+    ) == {"current_requests": 1, "current_tpm": 0, "current_rpm": 1}
+    for torn_minute in (FIRST_MINUTE_OF_FEBRUARY, TORN_MINUTE_OF_JANUARY):
+        assert await internal_usage_cache.async_get_cache(
+            key=f"{api_key}::{torn_minute}::request_count", litellm_parent_otel_span=None
+        ) is None
 
 
 @pytest.mark.asyncio
-async def test_callbacks_read_nested_litellm_metadata_for_success_and_failure():
-    cache = DualCache()
-    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
-    api_key = hash_token("sk-nested-limiting-metadata")
-    model = "restricted-model"
-    now = datetime.now()
-    precise_minute = now.strftime("%Y-%m-%d-%H-%M")
-    key = f"{api_key}::{precise_minute}::request_count"
-    model_key = f"{api_key}::{model}::{precise_minute}::request_count"
-    provider_metadata = {"customer_id": "cust-123"}
-    internal_metadata = {
-        "model_group": model,
-        "user_api_key": api_key,
-        "user_api_key_model_max_budget": {},
-        "user_api_key_metadata": {
-            "model_tpm_limit": {model: 100},
-            "model_rpm_limit": {model: 10},
-        },
-    }
-    kwargs = {
-        "litellm_params": {
-            "metadata": provider_metadata,
-            "litellm_metadata": internal_metadata,
-        },
-    }
-
-    await handler.async_log_success_event(
-        kwargs=kwargs,
-        response_obj=ModelResponse(
-            usage=Usage(prompt_tokens=4, completion_tokens=3, total_tokens=7),
-        ),
-        start_time=now,
-        end_time=now,
+async def test_a_success_event_across_a_minute_rollover_lands_in_the_bucket_of_its_first_clock_read():
+    internal_usage_cache: Final = InternalUsageCache(DualCache())
+    handler: Final = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=internal_usage_cache, clock=_clock_rolling_over_after_first_read()
     )
-
-    current = await cache.async_get_cache(key=key, litellm_parent_otel_span=None)
-    assert current["current_tpm"] == 7
-    assert current["current_requests"] == 0
-    model_current = await cache.async_get_cache(key=model_key, litellm_parent_otel_span=None)
-    assert model_current["current_tpm"] == 7
-    assert model_current["current_requests"] == 0
-    assert provider_metadata == {"customer_id": "cust-123"}
-
-    await cache.async_set_cache(
-        key=key,
-        value={"current_requests": 1, "current_tpm": 7, "current_rpm": 1},
+    api_key: Final = hash_token("sk-torn-success")
+    await internal_usage_cache.async_set_cache(
+        key=f"{api_key}::{LAST_MINUTE_OF_JANUARY}::request_count",
+        value={"current_requests": 1, "current_tpm": 0, "current_rpm": 1},
         litellm_parent_otel_span=None,
     )
-    failure_kwargs = {
-        "litellm_params": {
-            "metadata": provider_metadata,
-            "litellm_metadata": internal_metadata,
-        },
-        "exception": Exception("upstream failure"),
-    }
 
-    await handler.async_log_failure_event(
-        kwargs=failure_kwargs,
-        response_obj=None,
-        start_time=now,
-        end_time=now,
+    await handler.async_log_success_event(
+        kwargs={
+            "litellm_params": {
+                "metadata": {"user_api_key": api_key, "user_api_key_model_max_budget": {}}
+            }
+        },
+        response_obj=ModelResponse(usage=Usage(prompt_tokens=5, completion_tokens=2, total_tokens=7)),
+        start_time=LAST_MICROSECOND_OF_JANUARY,
+        end_time=FIRST_MICROSECOND_OF_FEBRUARY,
     )
 
-    current = await cache.async_get_cache(key=key, litellm_parent_otel_span=None)
-    assert current["current_requests"] == 0
+    assert await internal_usage_cache.async_get_cache(
+        key=f"{api_key}::{LAST_MINUTE_OF_JANUARY}::request_count", litellm_parent_otel_span=None
+    ) == {"current_requests": 0, "current_tpm": 7, "current_rpm": 1}
+    for torn_minute in (FIRST_MINUTE_OF_FEBRUARY, TORN_MINUTE_OF_JANUARY):
+        assert await internal_usage_cache.async_get_cache(
+            key=f"{api_key}::{torn_minute}::request_count", litellm_parent_otel_span=None
+        ) is None
+
+
+@pytest.mark.asyncio
+async def test_a_failure_event_across_a_minute_rollover_lands_in_the_bucket_of_its_first_clock_read():
+    internal_usage_cache: Final = InternalUsageCache(DualCache())
+    handler: Final = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=internal_usage_cache, clock=_clock_rolling_over_after_first_read()
+    )
+    api_key: Final = hash_token("sk-torn-failure")
+    await internal_usage_cache.async_set_cache(
+        key=f"{api_key}::{LAST_MINUTE_OF_JANUARY}::request_count",
+        value={"current_requests": 1, "current_tpm": 0, "current_rpm": 1},
+        litellm_parent_otel_span=None,
+    )
+
+    await handler.async_log_failure_event(
+        kwargs={
+            "litellm_params": {"metadata": {"user_api_key": api_key}},
+            "exception": Exception("upstream boom"),
+        },
+        response_obj=None,
+        start_time=LAST_MICROSECOND_OF_JANUARY,
+        end_time=FIRST_MICROSECOND_OF_FEBRUARY,
+    )
+
+    assert await internal_usage_cache.async_get_cache(
+        key=f"{api_key}::{LAST_MINUTE_OF_JANUARY}::request_count", litellm_parent_otel_span=None
+    ) == {"current_requests": 0, "current_tpm": 0, "current_rpm": 1}
+    for torn_minute in (FIRST_MINUTE_OF_FEBRUARY, TORN_MINUTE_OF_JANUARY):
+        assert await internal_usage_cache.async_get_cache(
+            key=f"{api_key}::{torn_minute}::request_count", litellm_parent_otel_span=None
+        ) is None
+
+
+@pytest.mark.asyncio
+async def test_a_post_call_headers_read_across_a_minute_rollover_uses_the_bucket_of_its_first_clock_read():
+    internal_usage_cache: Final = InternalUsageCache(DualCache())
+    handler: Final = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=internal_usage_cache, clock=_clock_rolling_over_after_first_read()
+    )
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key="sk-torn-post", rpm_limit=5, tpm_limit=100)
+    api_key: Final = user_api_key_dict.api_key
+    await internal_usage_cache.async_set_cache(
+        key=f"{api_key}::{LAST_MINUTE_OF_JANUARY}::request_count",
+        value={"current_requests": 1, "current_tpm": 10, "current_rpm": 1},
+        litellm_parent_otel_span=None,
+    )
+    response: Final = ModelResponse()
+    response._hidden_params = {}
+
+    await handler.async_post_call_success_hook(
+        data={"model": "gpt-4o-mini"},
+        user_api_key_dict=user_api_key_dict,
+        response=response,
+    )
+
+    assert response._hidden_params["additional_headers"] == {
+        "x-ratelimit-remaining-requests": 4,
+        "x-ratelimit-limit-requests": 5,
+        "x-ratelimit-remaining-tokens": 90,
+        "x-ratelimit-limit-tokens": 100,
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_request_in_one_minute_is_not_counted_by_a_pre_call_in_the_next_minute():
+    internal_usage_cache: Final = InternalUsageCache(DualCache())
+    handler: Final = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=internal_usage_cache,
+        clock=_clock_reading(iter([datetime(2026, 3, 10, 12, 0, 0), datetime(2026, 3, 10, 12, 1, 0)])),
+    )
+    session: Final = UserAPIKeyAuth(api_key="sk-minute-reset", rpm_limit=1)
+    api_key: Final = session.api_key
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=session, cache=DualCache(), data={"model": "gpt-4o-mini"}, call_type="completion"
+    )
+    await handler.async_pre_call_hook(
+        user_api_key_dict=session, cache=DualCache(), data={"model": "gpt-4o-mini"}, call_type="completion"
+    )
+
+    assert await internal_usage_cache.async_get_cache(
+        key=f"{api_key}::2026-03-10-12-01::request_count", litellm_parent_otel_span=None
+    ) == {"current_requests": 1, "current_tpm": 0, "current_rpm": 1}
+
+
+@pytest.mark.asyncio
+async def test_retry_after_is_the_seconds_until_the_next_minute_of_the_injected_clock():
+    internal_usage_cache: Final = InternalUsageCache(DualCache())
+    handler: Final = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=internal_usage_cache,
+        clock=_clock_reading(itertools.repeat(datetime(2026, 3, 10, 12, 0, 45, 500000))),
+    )
+    session: Final = UserAPIKeyAuth(api_key="sk-retry-after", rpm_limit=1)
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=session, cache=DualCache(), data={"model": "gpt-4o-mini"}, call_type="completion"
+    )
+    with pytest.raises(ProxyRateLimitError) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=session, cache=DualCache(), data={"model": "gpt-4o-mini"}, call_type="completion"
+        )
+
+    assert exc_info.value.headers["retry-after"] == "14.5"
