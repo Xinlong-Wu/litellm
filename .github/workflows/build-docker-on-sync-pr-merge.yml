@@ -1,0 +1,56 @@
+name: Build Docker Image on Sync PR Merge
+
+on:
+  pull_request:
+    types:
+      - closed
+    branches:
+      - litellm_internal_staging
+
+permissions: {}
+
+jobs:
+  resolve-upstream-tag:
+    name: Resolve Upstream Tag
+    if: github.event.pull_request.merged == true && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.event.pull_request.head.ref, 'upstream-release/')
+    runs-on: ubuntu-latest
+    outputs:
+      upstream_tag: ${{ steps.tag.outputs.upstream_tag }}
+    steps:
+      - name: Parse upstream tag
+        id: tag
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          upstream_tag="${HEAD_REF#upstream-release/}"
+
+          if ! echo "${upstream_tag}" | grep -qE '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$'; then
+            echo "::error::Upstream tag '${upstream_tag}' is not a valid Docker tag"
+            exit 1
+          fi
+
+          echo "upstream_tag=${upstream_tag}" >> "${GITHUB_OUTPUT}"
+
+  checks:
+    name: Checks
+    needs: resolve-upstream-tag
+    if: needs.resolve-upstream-tag.outputs.upstream_tag != ''
+    permissions:
+      contents: read
+    uses: ./.github/workflows/checks.yml
+    with:
+      ref: litellm_internal_staging
+
+  build-image:
+    name: Build Docker Image
+    needs: [resolve-upstream-tag, checks]
+    if: needs.resolve-upstream-tag.outputs.upstream_tag != ''
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/build-litellm-docker-image.yml
+    with:
+      upstream_tag: ${{ needs.resolve-upstream-tag.outputs.upstream_tag }}
+      ref: litellm_internal_staging
+      force_rebuild: true
+    secrets: inherit
