@@ -89,6 +89,9 @@ def _poll_run(creds: LangsmithCreds, run_id: uuid.UUID) -> LangsmithRun:
 
 
 class TestLangsmithBatchSerialization:
+    @pytest.mark.skipif(
+        not os.getenv("LANGSMITH_API_KEY"), reason="LANGSMITH_API_KEY is not provisioned in the e2e CI environment"
+    )
     @pytest.mark.asyncio
     @pytest.mark.covers("logging.langsmith.success.serializes_non_native_metadata")
     @meta(

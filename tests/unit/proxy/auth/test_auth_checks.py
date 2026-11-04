@@ -1530,6 +1530,7 @@ def _prisma_client_serving(user_id: str) -> SimpleNamespace:
         "policies": [],
         "model_spend": "{}",
         "model_max_budget": "{}",
+        "model_group_max_budget": "{}",
         "organization_memberships": [],
     }
     engine: Final = SimpleNamespace(query=AsyncMock(return_value={"data": {"result": row}}), stop=lambda: None)

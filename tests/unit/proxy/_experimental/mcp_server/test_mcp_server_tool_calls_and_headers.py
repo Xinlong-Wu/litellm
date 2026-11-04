@@ -5894,6 +5894,7 @@ async def test_get_tools_from_mcp_servers_returns_tools_when_success_logging_fai
             mcp_server_auth_headers=None,
             log_list_tools_to_spendlogs=True,
             list_tools_log_source="mcp_protocol",
+            enforce_rate_limits=False,
         )
 
     assert listing.tools == [tool_1]

@@ -182,6 +182,7 @@ async def test_backend_to_client_skips_non_utf8_binary_frames():
     logging_obj = MagicMock()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
 
     await streaming.backend_to_client_send_messages()
@@ -417,6 +418,7 @@ async def test_backend_to_client_drops_ping_events():
     logging_obj = MagicMock()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
     streaming = _xai_streaming(client_ws, backend_ws, logging_obj)
 
     await streaming.backend_to_client_send_messages()
@@ -452,6 +454,7 @@ async def test_backend_to_client_normalizes_empty_response_usage():
     logging_obj = MagicMock()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
     streaming = _xai_streaming(client_ws, backend_ws, logging_obj)
 
     await streaming.backend_to_client_send_messages()
@@ -485,6 +488,7 @@ async def test_backend_to_client_beta_receives_normalized_events():
     logging_obj = MagicMock()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
     streaming = _xai_streaming(client_ws, backend_ws, logging_obj)
 
     await streaming.backend_to_client_send_messages()
@@ -520,6 +524,7 @@ async def test_backend_to_client_stores_normalized_events_for_logging():
     logging_obj = MagicMock()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
     streaming = _xai_streaming(client_ws, backend_ws, logging_obj)
 
     await streaming.backend_to_client_send_messages()
@@ -788,6 +793,7 @@ async def test_log_messages_sets_input_messages_on_logging_obj():
     logging_obj.model_call_details = {"messages": "default-message-value"}
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
     streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
 
     streaming.input_messages = [
@@ -927,6 +933,7 @@ async def test_non_transcription_completed_event_still_triggers_response_create(
     logging_obj = MagicMock()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
 
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
     await streaming.backend_to_client_send_messages()
@@ -1307,6 +1314,7 @@ async def test_log_messages_includes_tools_in_model_call_details():
     logging_obj.model_call_details = {"messages": "default-message-value"}
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
     streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
 
     streaming.session_tools = [{"type": "function", "name": "get_weather", "description": "Get weather"}]
@@ -1376,6 +1384,7 @@ async def test_realtime_guardrail_blocks_prompt_injection(monkeypatch: pytest.Mo
     logging_obj = MagicMock()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
     await streaming.backend_to_client_send_messages()
 
@@ -1452,6 +1461,7 @@ async def test_realtime_guardrail_allows_clean_transcript(monkeypatch: pytest.Mo
     logging_obj = MagicMock()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
     await streaming.backend_to_client_send_messages()
 
@@ -1776,6 +1786,7 @@ async def test_realtime_session_created_injects_session_update_for_audio_guardra
     logging_obj = MagicMock()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
 
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
     await streaming.backend_to_client_send_messages()
@@ -1832,6 +1843,7 @@ async def test_realtime_session_created_does_not_inject_session_update_for_pre_c
     logging_obj = MagicMock()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
 
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
     await streaming.backend_to_client_send_messages()
@@ -1929,6 +1941,7 @@ async def test_end_session_after_n_fails_closes_connection(monkeypatch: pytest.M
     logging_obj = MagicMock()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
     await streaming.backend_to_client_send_messages()
 
@@ -1974,6 +1987,7 @@ async def test_on_violation_end_session_closes_on_first_fail(monkeypatch: pytest
     logging_obj = MagicMock()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
     await streaming.backend_to_client_send_messages()
 
@@ -2014,6 +2028,7 @@ async def test_provider_path_suppresses_duplicate_session_created_after_syntheti
     logging_obj.litellm_trace_id = "trace_1"
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
 
     streaming = RealTimeStreaming(
         websocket=client_ws,
@@ -2066,6 +2081,7 @@ async def test_duplicate_session_created_still_triggers_guardrail_turn_detection
     logging_obj.litellm_trace_id = "trace_1"
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
 
     streaming = RealTimeStreaming(
         websocket=client_ws,
@@ -2551,6 +2567,7 @@ async def test_deferred_setup_flushes_audio_on_backend_session_created(monkeypat
     logging_obj.litellm_trace_id = "trace_defer"
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
     config = GeminiRealtimeConfig()
 
     streaming = RealTimeStreaming(
@@ -2652,6 +2669,7 @@ def _streaming_with(client_ws):
     logging_obj = MagicMock()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
     return RealTimeStreaming(client_ws, backend_ws, logging_obj)
 
 
@@ -2714,6 +2732,7 @@ async def test_beta_client_receives_translated_audio_delta():
     logging_obj = MagicMock()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
 
     await streaming.backend_to_client_send_messages()
@@ -2733,6 +2752,7 @@ async def test_ga_client_receives_raw_passthrough():
     logging_obj = MagicMock()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
 
     await streaming.backend_to_client_send_messages()
@@ -2753,6 +2773,7 @@ async def test_beta_client_non_translated_event_forwarded_raw():
     logging_obj = MagicMock()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
 
     await streaming.backend_to_client_send_messages()
@@ -2770,6 +2791,7 @@ async def test_beta_client_drops_conversation_item_done():
     logging_obj = MagicMock()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
 
     await streaming.backend_to_client_send_messages()
@@ -2796,6 +2818,7 @@ async def test_audio_delta_frame_parsed_at_most_once():
     logging_obj = MagicMock()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
 
     real_loads = json.loads
@@ -3105,6 +3128,7 @@ async def test_session_close_flush_noop_without_unbilled_usage():
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
     logging_obj.dispatch_success_handlers = AsyncMock()
+    logging_obj.dispatch_failure_handlers = AsyncMock()
 
     provider_config: Final = MagicMock()
     provider_config.unbilled_usage_on_session_close = MagicMock(return_value=None)
@@ -3642,10 +3666,12 @@ async def test_transcription_guardrail_sends_no_session_update_after_transcripti
     backend_ws: Final = MagicMock()
     backend_ws.recv = AsyncMock(side_effect=[json.dumps(session_created).encode(), ConnectionClosed(None, None)])
     backend_ws.send = AsyncMock()
+    logging_obj: Final = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
     streaming: Final = RealTimeStreaming(
         client_ws,
         backend_ws,
-        MagicMock(),
+        logging_obj,
         provider_config=provider_config,
         model="gpt-4o-transcribe",
         force_transcription_model="gpt-4o-transcribe",
@@ -3680,7 +3706,9 @@ async def test_provider_transcription_session_created_flags_session_without_inte
     backend_ws: Final = MagicMock()
     backend_ws.recv = AsyncMock(side_effect=[json.dumps(session_created).encode(), ConnectionClosed(None, None)])
     backend_ws.send = AsyncMock()
-    streaming: Final = RealTimeStreaming(client_ws, backend_ws, MagicMock(), provider_config=provider_config, model="m")
+    logging_obj: Final = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
+    streaming: Final = RealTimeStreaming(client_ws, backend_ws, logging_obj, provider_config=provider_config, model="m")
 
     await streaming.backend_to_client_send_messages()
 
@@ -3796,10 +3824,12 @@ async def test_transcription_session_guardrail_block_only_reports_violation(
     backend_ws.recv = AsyncMock(side_effect=[blocked_event, *follow_up_events, ConnectionClosed(None, None)])
     backend_ws.send = AsyncMock()
     backend_ws.close = AsyncMock()
+    logging_obj: Final = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
     streaming: Final = RealTimeStreaming(
         client_ws,
         backend_ws,
-        MagicMock(),
+        logging_obj,
         provider_config=_passthrough_transcription_config() if uses_provider_config else None,
         model="gpt-4o-transcribe",
         force_transcription_model="gpt-4o-transcribe",

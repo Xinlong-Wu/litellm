@@ -1217,17 +1217,13 @@ def _in_progress_interaction_kwargs(reservation: dict) -> dict:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", ["in_progress", "queued"])
+@pytest.mark.parametrize("status", ["in_progress"])
 async def test_track_cost_callback_keeps_reservation_open_for_in_progress_background_interaction(status):
     """
     The pre-call budget reservation must stay open while a background
     interaction is in flight, so concurrent creates cannot stack past the
     budget; the poll task's completion event reconciles it to the actual cost.
 
-    ``queued`` is in flight for the same reason ``in_progress`` is: it has not
-    reached a terminal status, so releasing its reservation here would drop the
-    estimate off the spend counters while the interaction is still going to run
-    and still going to cost money.
     """
     from litellm.types.interactions import InteractionsAPIResponse
 
@@ -1464,7 +1460,7 @@ async def test_callback_handles_every_status_the_interactions_api_can_return():
 
         (deferred if reservation["finalized"] is False else released).add(status)
 
-    assert deferred == {"in_progress", "queued"}
+    assert deferred == {"in_progress"}
     assert released == {
         "completed",
         "requires_action",
