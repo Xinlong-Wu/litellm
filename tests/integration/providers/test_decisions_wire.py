@@ -113,6 +113,9 @@ _PROVIDERS: Final = (
         "fireworks_ai/accounts/fireworks/routers/rune",
     ),
     _Provider(
+        "hosted_vllm", "hosted_vllm/Qwen/Qwen3-0.6B", "/v1/systemone", "Qwen/Qwen3-0.6B", None, False, None
+    ),
+    _Provider(
         "cloudflare",
         "cloudflare/clef",
         "/ai/run/@cf/cloudflare/clef",

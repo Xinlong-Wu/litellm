@@ -666,56 +666,34 @@ def test_a_baseline_that_prices_caching_implicitly_still_pays_for_its_prompt():
     assert reported > 0, "routing a cold first turn onto a cheaper model is a saving, not a loss"
 
 
-def _priced_chat_model_without_cache_read_rate() -> tuple[str, str, str]:
-    """A chat model the bundled map prices per token for input and output but not for cache
-    reads, derived from the map itself: a hardcoded pick goes stale the moment the registry
-    prices that model's cache reads, which is exactly how this test's premise last broke.
-    Candidates go through the savings module's own resolver, so the pick is one the code
-    under test can actually price."""
-    for key in sorted(litellm.model_cost):
-        entry = litellm.model_cost[key]
-        provider = entry.get("litellm_provider")
-        if not isinstance(provider, str) or not key.startswith(f"{provider}/"):
-            continue
-        if entry.get("mode") != "chat" or entry.get("cache_read_input_token_cost") is not None:
-            continue
-        if not entry.get("input_cost_per_token") or not entry.get("output_cost_per_token"):
-            continue
-        if _resolve_model(key, None) is None:
-            continue
-        priced = compute_autorouter_savings(
-            baseline_model=key,
-            selected_model="claude-haiku-4-5",
-            selected_provider="anthropic",
-            usage=_usage(fresh=1_000, cached=0, written=0, out=100),
-            conversation_continuing=True,
-        )
-        if priced is None or priced == 0.0:
-            continue
-        return key, key.removeprefix(f"{provider}/"), provider
-    raise AssertionError("the bundled map has no per-token chat model without a cache-read rate")
-
-
 def test_a_baseline_with_no_cache_read_rate_is_charged_its_input_rate():
     """The same hole on the other bucket. A baseline whose entry has no
     `cache_read_input_token_cost` reads for 0.0, so a continuing turn priced the whole
     prompt at nothing and every switch away from it reported a loss.
     """
-    baseline_key, baseline_name, baseline_provider = _priced_chat_model_without_cache_read_rate()
     continuing = _usage(fresh=0, cached=0, written=20_000, out=1_000)
+    baseline_info = {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "cache_read_input_token_cost": None,
+    }
+    selected_info = {
+        "input_cost_per_token": 4e-7,
+        "output_cost_per_token": 1e-6,
+        "cache_creation_input_token_cost": 1.25e-6,
+    }
     reported = compute_autorouter_savings(
-        baseline_model=baseline_key,
+        baseline_model="anthropic/claude-opus-5",
         selected_model="claude-haiku-4-5",
         selected_provider="anthropic",
         usage=continuing,
+        baseline_info=baseline_info,
+        selected_info=selected_info,
         baseline_usage=_usage(0, 20000, 0, 1000),
     )
 
-    baseline = litellm.get_model_info(baseline_name, baseline_provider)
-    assert baseline.get("cache_read_input_token_cost") is None, "pick a baseline with no cache-read rate"
-    haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
-    baseline_pays_input = 20_000 * baseline["input_cost_per_token"] + 1_000 * baseline["output_cost_per_token"]
-    actually_paid = 20_000 * haiku["cache_creation_input_token_cost"] + 1_000 * haiku["output_cost_per_token"]
+    baseline_pays_input = 20_000 * 1e-6 + 1_000 * 2e-6
+    actually_paid = 20_000 * 1.25e-6 + 1_000 * 1e-6
     assert reported == pytest.approx(baseline_pays_input - actually_paid)
 
 

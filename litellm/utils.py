@@ -1001,6 +1001,12 @@ def _ocr_document_summary(document: object) -> str:
     return kind
 
 
+# Decisions and SystemOne use a state payload rather than chat messages.
+_DECISION_CALL_TYPES: Final[frozenset[str]] = frozenset(
+    (CallTypes.decisions.value, CallTypes.adecisions.value, CallTypes.systemone.value, CallTypes.asystemone.value)
+)
+
+
 # Runs once per call to check if the user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
 
 

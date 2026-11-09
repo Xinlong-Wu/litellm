@@ -4148,16 +4148,6 @@ _CONSTRAINED_SCHEMA: Final = {
     "required": ["summary", "kind"],
     "additionalProperties": False,
 }
-_ANTHROPIC_MESSAGE: Final = {
-    "id": "msg_scripted",
-    "type": "message",
-    "role": "assistant",
-    "model": "claude-scripted",
-    "content": [{"type": "text", "text": '{"summary": "sunny", "kind": 1}'}],
-    "stop_reason": "end_turn",
-    "stop_sequence": None,
-    "usage": {"input_tokens": 1, "output_tokens": 1},
-}
 _THINKING_HISTORY: Final = (
     {"role": "user", "content": "Describe the weather."},
     {
@@ -4169,17 +4159,6 @@ _THINKING_HISTORY: Final = (
     },
     {"role": "user", "content": "Summarise it as JSON."},
 )
-
-
-@dataclass(slots=True)
-class ScriptedBedrockInvoke:
-    replies: tuple[tuple[int, Mapping[str, object]], ...]
-    bodies: tuple[dict[str, object], ...] = ()
-
-    def __call__(self, request: httpx.Request) -> httpx.Response:
-        self.bodies = (*self.bodies, REASONING_BODY_ADAPTER.validate_json(request.content))
-        status_code, body = self.replies[len(self.bodies) - 1]
-        return httpx.Response(status_code, json=body)
 
 
 async def _send_bedrock_messages(

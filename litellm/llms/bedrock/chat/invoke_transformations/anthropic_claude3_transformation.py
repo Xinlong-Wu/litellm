@@ -86,6 +86,10 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
     def custom_llm_provider(self) -> str | None:
         return "bedrock"
 
+    @property
+    def _carries_thinking_block_binding(self) -> bool:
+        return type(self) is AmazonAnthropicClaudeConfig
+
     def should_strip_billing_metadata(self) -> bool:
         return True
 

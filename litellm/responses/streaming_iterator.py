@@ -228,23 +228,34 @@ _ERROR_CODE_HTTP_STATUS: Final[Mapping[str, int]] = MappingProxyType(
 )
 
 
-def _error_event_fields(error_obj: object) -> tuple[str, str | None, str | None]:
+def _error_event_fields(
+    error_obj: object,
+) -> tuple[
+    str,
+    str | None,
+    str | None,
+    str | Mapping[str, Any] | None,
+]:
     if _is_json_object(error_obj):
         raw_message = error_obj.get("message")
         raw_type = error_obj.get("type")
         raw_code = error_obj.get("code")
+        raw_param = error_obj.get("param")
     elif error_obj is not None:
         raw_message = getattr(error_obj, "message", None)
         raw_type = getattr(error_obj, "type", None)
         raw_code = getattr(error_obj, "code", None)
+        raw_param = getattr(error_obj, "param", None)
     else:
         raw_message = None
         raw_type = None
         raw_code = None
-    message: Final = str(raw_message) if raw_message is not None else "Response API in-stream error"
+        raw_param = None
+    message: Final = raw_message if isinstance(raw_message, str) else "Response API in-stream error"
     error_type: Final = raw_type if isinstance(raw_type, str) else None
     code: Final = str(raw_code) if isinstance(raw_code, (str, int)) and not isinstance(raw_code, bool) else None
-    return message, error_type, code
+    param: Final = raw_param if isinstance(raw_param, (str, dict)) else None
+    return message, error_type, code, param
 
 
 def _status_code_for_error_field(field: str) -> int | None:
@@ -261,7 +272,7 @@ def _status_code_for_error_fields(error_type: str | None, error_code: str | None
 
 
 def stream_error_status_and_message(error_obj: object) -> tuple[int, str]:
-    message, error_type, error_code = _error_event_fields(error_obj)
+    message, error_type, error_code, _ = _error_event_fields(error_obj)
     return _status_code_for_error_fields(error_type, error_code), message
 
 
@@ -270,9 +281,9 @@ def _map_stream_error_to_exception(
 ) -> Exception:
     from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
-    error_message, error_type, error_code = _error_event_fields(error_obj)
+    error_message, error_type, error_code, error_param = _error_event_fields(error_obj)
     status_code: Final = _status_code_for_error_fields(error_type, error_code)
-    error_body: Final = {"message": error_message, "type": error_type, "code": error_code}
+    error_body: Final = {"message": error_message, "type": error_type, "code": error_code, "param": error_param}
     provider_exception: Final = BaseLLMException(
         status_code=status_code,
         message=f"Error code: {status_code} - {{'error': {error_body}}}",
@@ -303,7 +314,11 @@ def _error_event_error_object(event: object) -> object:
     nested_error: Final = _event_field(event, "error")
     if nested_error is not None:
         return nested_error
-    return {field: value for field in ("message", "code") if _is_error_field_value(value := _event_field(event, field))}
+    return {
+        field: value
+        for field in ("message", "code", "param")
+        if _is_error_field_value(value := _event_field(event, field))
+    }
 
 
 def _mid_stream_fallback_eligible(mapped_exception: Exception) -> bool:
@@ -697,6 +712,16 @@ class BaseResponsesAPIStreamingIterator:
         )
 
         mapped_exception: Final = self._map_error_event_exception(error_obj)
+        error_message, _, error_code, error_param = _error_event_fields(error_obj)
+        raw_sequence_number: Final = getattr(result, "sequence_number", 0)
+        response_error_event: Final = {
+            "type": "error",
+            "code": error_code,
+            "message": error_message,
+            "param": error_param if isinstance(error_param, str) else None,
+            "sequence_number": raw_sequence_number if isinstance(raw_sequence_number, int) else 0,
+        }
+        mapped_exception.__dict__["_litellm_response_error_event"] = response_error_event
         if not _mid_stream_fallback_eligible(mapped_exception):
             raise mapped_exception
         mapped_status: Final = getattr(mapped_exception, "status_code", None)

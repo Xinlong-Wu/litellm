@@ -261,6 +261,8 @@ class CheckBatchCost:
             return
         if retired == 0:
             return
+        if retired == 0:
+            return
         verbose_proxy_logger.warning(
             f"CheckBatchCost: job {job.id} can never be costed ({reason}), so it will no longer be polled"
         )

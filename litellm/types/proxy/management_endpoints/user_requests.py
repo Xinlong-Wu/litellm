@@ -6,7 +6,7 @@ from pydantic import Field, field_validator, model_validator
 from litellm.models.user import LiteLLM_UserTable
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 from litellm.types.proxy.management_endpoints.request_base import GenerateRequestBase
-from litellm.types.utils import LiteLLMPydanticObjectBase
+from litellm.types.utils import GenericBudgetConfigType, LiteLLMPydanticObjectBase
 
 
 class NewUserRequestTeam(LiteLLMPydanticObjectBase):
@@ -17,6 +17,7 @@ class NewUserRequestTeam(LiteLLMPydanticObjectBase):
 
 class NewUserRequest(GenerateRequestBase):
     max_budget: float | None = None
+    model_group_max_budget: GenericBudgetConfigType | None = None
     user_email: str | None = None
     user_alias: str | None = None
     user_role: (
@@ -62,6 +63,7 @@ class UpdateUserRequestNoUserIDorEmail(GenerateRequestBase):  # shared with Bulk
         | None
     ) = None
     max_budget: float | None = None
+    model_group_max_budget: GenericBudgetConfigType | None = None
 
 
 class UpdateUserRequest(UpdateUserRequestNoUserIDorEmail):

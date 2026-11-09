@@ -164,6 +164,20 @@ mod tests {
             .headers
     }
 
+    /// The headers as they go on the wire, credential applied.
+    fn wire_headers(prepared: &ProviderChatCompletionsRequest) -> Vec<(String, String)> {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(resolve_auth(
+                &litellm_auth::AuthServices::default(),
+                prepared.environment.clone(),
+                &|_| None,
+            ))
+            .unwrap()
+            .headers
+    }
+
     fn request<'a>(
         model: &'a str,
         provider: Option<&'a str>,
