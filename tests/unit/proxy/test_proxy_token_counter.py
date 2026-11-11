@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import anyio
 import httpx
 import pytest
+import respx
 import tiktoken
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, JsonValue
@@ -40,6 +41,7 @@ from fastapi.responses import JSONResponse
 import litellm
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.anthropic.count_tokens import handler as anthropic_count_tokens_handler
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -359,63 +361,41 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
 
 
 @pytest.mark.asyncio
-async def test_internal_token_counter_anthropic_provider_detection():
-    """
-    Test that the internal token_counter correctly detects Anthropic providers
-    and handles the from_anthropic_endpoint flag appropriately
-    """
-
-    # Test with Anthropic provider
-    llm_router = Router(
-        model_list=[
-            {
-                "model_name": "claude-test",
-                "litellm_params": {
-                    "model": "anthropic/claude-3-sonnet-20240229",
-                    "api_key": "test-key",
-                },
-            }
-        ]
+@pytest.mark.parametrize("status_code", (400, 401, 403, 404, 429, 500))
+@pytest.mark.parametrize(
+    ("model", "count_url"),
+    (
+        ("anthropic/claude-sonnet-5-5", "https://api.anthropic.com/v1/messages/count_tokens"),
+        ("openai/gpt-6.1-sol", "https://api.openai.com/v1/responses/input_tokens"),
+    ),
+)
+async def test_provider_errors_are_returned_to_the_caller(
+    monkeypatch: pytest.MonkeyPatch, status_code: int, model: str, count_url: str
+) -> None:
+    messages: Final = [
+        {"role": "user", "content": "Count the whole request locally when the count API is unavailable."}
+    ]
+    router: Final = Router(
+        model_list=[{"model_name": "counted", "litellm_params": {"model": model, "api_key": "test-count-key"}}]
     )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "disable_token_counter", False)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
 
-    setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
-
-    # Test with is_direct_request=False (simulating call from Anthropic endpoint)
-    # The provider counter is engaged: its API error surfaces instead of a local count
-    with pytest.raises(ProxyException) as exc_info:
-        await token_counter(
-            request=TokenCountRequest(
-                model="claude-test",
-                messages=[{"role": "user", "content": "hello"}],
-            ),
-            call_endpoint=True,
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(count_url).mock(
+            return_value=httpx.Response(
+                status_code, json={"type": "error", "error": {"type": "api_error", "message": "Count unavailable"}}
+            )
         )
-    assert exc_info.value.type == "token_counting_error"
+        with pytest.raises(ProxyException) as error:
+            await token_counter(
+                request=TokenCountRequest(model="counted", messages=messages), call_endpoint=True
+            )
 
-    # Test with non-Anthropic provider
-    llm_router = Router(
-        model_list=[
-            {
-                "model_name": "gpt-test",
-                "litellm_params": {
-                    "model": "gpt-4",
-                },
-            }
-        ]
-    )
-
-    setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
-
-    with pytest.raises(ProxyException) as missing_key:
-        await token_counter(
-            request=TokenCountRequest(
-                model="gpt-test",
-                messages=[{"role": "user", "content": "hello"}],
-            ),
-            call_endpoint=True,
-        )
-    assert missing_key.value.code == "401"
-    assert "No OpenAI API key is set for model gpt-test" in missing_key.value.message
+    assert error.value.type == "token_counting_error"
+    assert error.value.code == str(status_code)
 
 
 @pytest.mark.asyncio
@@ -2505,7 +2485,9 @@ async def test_configured_token_count_model_overrides_the_shipped_one_and_an_emp
 async def test_shipped_token_count_model_keeps_the_prompt_in_the_deployment_geography(
     monkeypatch: pytest.MonkeyPatch, aws_region_name: str, counted_in: str
 ):
-    counter: Final = _ScriptedCounter({"bedrock_mantle/anthropic.claude-opus-5-5": _provider_reply("opus", total_tokens=447)})
+    counter: Final = _ScriptedCounter(
+        {"bedrock_mantle/anthropic.claude-opus-5-5": _provider_reply("opus", total_tokens=447)}
+    )
     monkeypatch.setattr(
         litellm.proxy.proxy_server,
         "llm_router",
@@ -2549,7 +2531,9 @@ async def _longest_stall(done: asyncio.Event) -> float:
 async def test_region_lookup_for_a_shipped_count_model_leaves_the_event_loop_free(monkeypatch: pytest.MonkeyPatch):
     from litellm.proxy import proxy_server
 
-    counter: Final = _ScriptedCounter({"bedrock_mantle/anthropic.claude-opus-5-5": _provider_reply("opus", total_tokens=447)})
+    counter: Final = _ScriptedCounter(
+        {"bedrock_mantle/anthropic.claude-opus-5-5": _provider_reply("opus", total_tokens=447)}
+    )
 
     def bedrock_counter(deployment: object, model: str) -> tuple[_ScriptedCounter, str, str]:
         return counter, model, "bedrock"

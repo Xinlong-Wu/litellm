@@ -107,6 +107,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
       makePlaygroundDecisionRequest(request, apiKey, getCustomProxyBaseUrl(), { signal }),
   });
   const isLoading = systemOne.isPending;
+  const hasResult = isLoading || systemOne.data !== undefined || systemOne.error !== null;
   const { reset: resetSystemOne } = systemOne;
 
   useEffect(() => () => activeController.current?.abort(), []);
@@ -336,6 +337,19 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
             isLoading={isLoading}
           />
         </section>
+
+        {hasResult && (
+          <section className="grid content-start gap-4 xl:min-h-0 xl:overflow-auto" aria-label="Decisions results">
+            <ResponseView
+              response={systemOne.data?.response}
+              view={view}
+              fallbackModel={validation.payload?.model}
+              latencyMs={systemOne.data?.latencyMs}
+              error={systemOne.error?.message}
+              isLoading={isLoading}
+            />
+          </section>
+        )}
       </div>
     </div>
   );

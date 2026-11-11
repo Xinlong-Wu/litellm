@@ -16,7 +16,7 @@ import sys
 import threading
 from collections.abc import Mapping
 from pathlib import Path
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import patch
 
@@ -29,6 +29,9 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
+from litellm.llms.base_llm.anthropic_messages.transformation import (  # noqa: E402  # sys.path must be patched before importing litellm
+    BaseAnthropicMessagesConfig,
+)
 from litellm.proxy._types import SpecialHeaders  # noqa: E402  # sys.path must be patched before importing litellm
 
 # Fake tokens for testing (not real secrets)
@@ -3299,9 +3302,6 @@ class TestWifAsyncSeam:
 
     @pytest.mark.asyncio
     async def test_base_default_avalidate_delegates_to_sync(self):
-        from litellm.llms.base_llm.anthropic_messages.transformation import (
-            BaseAnthropicMessagesConfig,
-        )
 
         class SyncOnlyConfig(BaseAnthropicMessagesConfig):
             def validate_anthropic_messages_environment(

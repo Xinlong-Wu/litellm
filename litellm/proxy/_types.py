@@ -1225,6 +1225,7 @@ class GenerateKeyResponse(KeyRequestBase):
             "permissions",
             "model_max_budget",
             "budget_fallbacks",
+            "model_group_max_budget",
             "router_settings",
             "budget_limits",
         ]
@@ -1719,6 +1720,7 @@ class NewUserResponse(GenerateKeyResponse):
     teams: list | None = None
     user_alias: str | None = None
     model_max_budget: dict | None = None
+    model_group_max_budget: dict | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -1774,6 +1776,10 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
     model_max_budget: GenericBudgetConfigType | None = Field(
         default=None,
         description="Max budget for each model (e.g. {'gpt-4o': {'max_budget': '0.0000001', 'budget_duration': '1d', 'tpm_limit': 1000, 'rpm_limit': 1000}})",
+    )
+    model_group_max_budget: GenericBudgetConfigType | None = Field(
+        default=None,
+        description="Max budget for each access group / model group (e.g. {'premium-models': {'max_budget': 50, 'budget_duration': '30d'}}). Spend across every model in the access group accrues to one cap.",
     )
     budget_reset_at: datetime | None = Field(
         default=None,
@@ -1906,6 +1912,7 @@ class NewTeamRequest(TeamBase):
     default_estimated_output_tokens_per_model: Mapping[str, PositiveInt] | None = None
     mcp_rpm_limit: dict[str, int] | None = None
     team_member_budget: float | None = None  # allow user to set a budget for all team members
+    team_member_model_group_max_budget: GenericBudgetConfigType | None = None
     team_member_rpm_limit: int | None = None  # allow user to set RPM limit for all team members
     team_member_tpm_limit: int | None = None  # allow user to set TPM limit for all team members
     team_member_key_duration: str | None = None  # e.g. "1d", "1w", "1m"
@@ -1969,6 +1976,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     disable_global_guardrails: bool | None = None
     require_trace_id: bool | None = None
     team_member_budget: float | None = None
+    team_member_model_group_max_budget: GenericBudgetConfigType | None = None
     team_member_budget_duration: str | None = None
     team_member_model_max_budget: GenericBudgetConfigType | None = None
     team_member_rpm_limit: int | None = None
@@ -3842,6 +3850,10 @@ class ProxyErrorTypes(str, enum.Enum):
     budget_exceeded = "budget_exceeded"
     """
     Object was over budget
+    """
+    rate_limit_error = "rate_limit_error"
+    """
+    Object was over its TPM/RPM rate limit
     """
     no_db_connection = "no_db_connection"
     """

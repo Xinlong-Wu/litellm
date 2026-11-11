@@ -86,6 +86,16 @@ def _file_failures(
             )
             is not None
         ),
+        *(
+            failure
+            for key, entry in head_map.items()
+            if (
+                failure := _evaluation_output_price_failure(
+                    key, entry, evaluation_output_price_sources
+                )
+            )
+            is not None
+        ),
     )
 
 

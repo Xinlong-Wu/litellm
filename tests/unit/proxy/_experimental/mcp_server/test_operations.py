@@ -1950,8 +1950,13 @@ async def test_guardrail_context_never_recovers_a_previous_request_bearer(
 async def test_discovery_optional_probes_use_remaining_listing_budget(delay, monkeypatch):
     from types import SimpleNamespace
     from mcp.types import (
-        DiscoverRequest, ListToolsResult, ListPromptsResult, ListResourcesResult,
-        ListResourceTemplatesResult, ToolsCapability, Tool,
+        DiscoverRequest,
+        ListToolsResult,
+        ListPromptsResult,
+        ListResourcesResult,
+        ListResourceTemplatesResult,
+        ToolsCapability,
+        Tool,
     )
     from litellm.proxy import proxy_server
     from litellm.proxy._experimental.mcp_server import subscriptions
@@ -1982,9 +1987,15 @@ async def test_discovery_optional_probes_use_remaining_listing_budget(delay, mon
         patch.object(operations, "_execute_handle_list_tools", side_effect=tools),
         patch.object(operations, "_execute_list_prompts", return_value=ListPromptsResult(prompts=[])),
         patch.object(operations, "_execute_list_resources", return_value=ListResourcesResult(resources=[])),
-        patch.object(operations, "_execute_list_resource_templates", return_value=ListResourceTemplatesResult(resource_templates=[])),
+        patch.object(
+            operations,
+            "_execute_list_resource_templates",
+            return_value=ListResourceTemplatesResult(resource_templates=[]),
+        ),
         patch.object(operations, "_mcp_server_rate_limit_rejection", return_value=None),
-        patch.object(subscriptions, "_targets", side_effect=blocked if delay == "target" else None, return_value=(target,)) as targets,
+        patch.object(
+            subscriptions, "_targets", side_effect=blocked if delay == "target" else None, return_value=(target,)
+        ) as targets,
     ):
         context = prepare_context(UserAPIKeyAuth(user_id="scoped"), protocol_version="2026-07-28")
         result = await asyncio.wait_for(GatewayOperations().execute(DiscoverRequest(), context), 0.5)

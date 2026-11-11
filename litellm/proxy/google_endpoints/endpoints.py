@@ -5,7 +5,7 @@ from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, ORJSONResponse
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, field_validator
 
 from litellm.litellm_core_utils.json_validation_rule import normalize_json_schema_types
 from litellm.proxy._types import *
@@ -34,6 +34,12 @@ class _GoogleCountTokensSystemInstruction(BaseModel):
     model_config = ConfigDict(frozen=True)
     parts: tuple[_GoogleCountTokensTextPart, ...]
 
+    @field_validator("parts", mode="before")
+    @classmethod
+    def normalize_single_part(cls, value: object) -> object:
+        """Google accepts both a single Part object and an array of Parts."""
+        return (value,) if isinstance(value, Mapping) else value
+
 
 class _GoogleCountTokensFunctionDeclaration(BaseModel):
     model_config = ConfigDict(frozen=True, populate_by_name=True)
@@ -55,6 +61,12 @@ class _GoogleCountTokensRequest(BaseModel):
     contents: tuple[Mapping[str, JsonValue], ...] = ()
     system_instruction: _GoogleCountTokensSystemInstruction | None = Field(default=None, alias="systemInstruction")
     tools: tuple[_GoogleCountTokensTool, ...] = ()
+
+    @field_validator("tools", mode="before")
+    @classmethod
+    def normalize_optional_tools(cls, value: object) -> object:
+        """Treat the optional JSON `tools: null` spelling as an empty tool list."""
+        return () if value is None else value
 
 
 router: Final = APIRouter(

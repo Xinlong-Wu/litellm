@@ -18,7 +18,7 @@ from prisma.errors import ClientNotConnectedError
 from pydantic import TypeAdapter
 
 import litellm
-from litellm._service_logger import ServiceTypes
+from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 from litellm.proxy.db.log_db_metrics import log_db_metrics
@@ -79,10 +79,12 @@ def rig(monkeypatch: pytest.MonkeyPatch) -> _Rig:
     otel: Final = OpenTelemetry(config=OpenTelemetryConfig(exporter=exporter), tracer_provider=provider)
     with patch("asyncio.create_task", side_effect=_discard_periodic_flush):
         datadog: Final = DataDogLogger()
+    service_logging: Final = ServiceLogging()
+    monkeypatch.setattr(proxy_logging_obj, "service_logging_obj", service_logging)
     monkeypatch.setattr(litellm, "service_callback", [otel, datadog, "prometheus_system"])
-    monkeypatch.setattr(proxy_logging_obj.service_logging_obj, "dd_logger", datadog, raising=False)
+    monkeypatch.setattr(service_logging, "dd_logger", datadog, raising=False)
     monkeypatch.setattr(
-        proxy_logging_obj.service_logging_obj, "prometheusServicesLogger", PrometheusServicesLogger(), raising=False
+        service_logging, "prometheusServicesLogger", PrometheusServicesLogger(), raising=False
     )
     return _Rig(exporter, provider, datadog)
 

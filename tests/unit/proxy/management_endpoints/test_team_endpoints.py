@@ -2801,12 +2801,14 @@ async def test_update_team_team_member_budget_not_passed_to_db(
             team_member_tpm_limit=None,
             team_member_budget_duration=None,
             team_member_model_max_budget=None,
+            team_member_model_group_max_budget=None,
             user_api_key_cache=None,
             explicitly_set_fields=frozenset(),
         ):
             # Remove team_member_budget from updated_kv as the real function does
             result_kv = updated_kv.copy()
             result_kv.pop("team_member_budget", None)
+            result_kv.pop("team_member_model_group_max_budget", None)
             return result_kv
 
         mock_upsert_budget.side_effect = mock_upsert_side_effect
@@ -2914,6 +2916,7 @@ def test_clean_team_member_fields():
         "team_member_budget_duration": "30d",
         "team_member_rpm_limit": 50,
         "team_member_tpm_limit": 1000,
+        "team_member_model_group_max_budget": {"premium": {"max_budget": 10.0}},
         "other_field": "should_remain",
     }
 
@@ -2923,6 +2926,7 @@ def test_clean_team_member_fields():
     assert "team_member_budget_duration" not in data_dict
     assert "team_member_rpm_limit" not in data_dict
     assert "team_member_tpm_limit" not in data_dict
+    assert "team_member_model_group_max_budget" not in data_dict
     assert data_dict["team_id"] == "test_team"
     assert data_dict["team_alias"] == "Test Team"
     assert data_dict["other_field"] == "should_remain"
@@ -3371,12 +3375,14 @@ async def test_update_team_with_team_member_budget_duration(
             team_member_tpm_limit=None,
             team_member_budget_duration=None,
             team_member_model_max_budget=None,
+            team_member_model_group_max_budget=None,
             user_api_key_cache=None,
             explicitly_set_fields=frozenset(),
         ):
             result_kv = updated_kv.copy()
             result_kv.pop("team_member_budget", None)
             result_kv.pop("team_member_budget_duration", None)
+            result_kv.pop("team_member_model_group_max_budget", None)
             return result_kv
 
         mock_upsert_budget.side_effect = mock_upsert_side_effect
@@ -11180,6 +11186,7 @@ async def test_create_team_member_budget_table_with_duration():
         team_member_budget=20.0,
         team_member_budget_duration="30d",
         team_member_model_max_budget={"gpt-4o": {"max_budget": 5.0, "budget_duration": "1d"}},
+        team_member_model_group_max_budget={"premium": {"max_budget": 10.0, "budget_duration": "1d"}},
     )
 
     with patch(
@@ -11194,6 +11201,7 @@ async def test_create_team_member_budget_table_with_duration():
             team_member_budget=20.0,
             team_member_budget_duration="30d",
             team_member_model_max_budget=data.team_member_model_max_budget,
+            team_member_model_group_max_budget=data.team_member_model_group_max_budget,
         )
 
         mock_new_budget.assert_awaited_once()
@@ -11201,6 +11209,7 @@ async def test_create_team_member_budget_table_with_duration():
         assert budget_request.budget_duration == "30d"
         assert budget_request.max_budget == 20.0
         assert budget_request.model_max_budget == data.team_member_model_max_budget
+        assert budget_request.model_group_max_budget == data.team_member_model_group_max_budget
         assert result["metadata"]["team_member_budget_id"] == "budget-abc"
 
 

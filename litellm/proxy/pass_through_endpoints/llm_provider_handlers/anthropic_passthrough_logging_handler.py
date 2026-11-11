@@ -38,6 +38,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
 from litellm.types.utils import (
+    Choices,
     CompletionTokensDetailsWrapper,
     LiteLLMBatch,
     ModelResponse,
@@ -593,7 +594,7 @@ class AnthropicPassthroughLoggingHandler:
 
         from litellm._uuid import uuid
         from litellm.llms.anthropic.batches.transformation import AnthropicBatchesConfig
-        from litellm.types.utils import Choices, SpecialEnums
+        from litellm.types.utils import SpecialEnums
 
         try:
             _json_response: Final = httpx_response.json()

@@ -97,6 +97,10 @@ class AmazonAnthropicClaudeMessagesConfig(
         return "bedrock"
 
     @property
+    def _carries_thinking_block_binding(self) -> bool:
+        return type(self) is AmazonAnthropicClaudeMessagesConfig
+
+    @property
     def beta_headers_provider(self) -> str:
         return self.custom_llm_provider or "bedrock"
 

@@ -984,7 +984,7 @@ def test_bedrock_chat_invoke_tool_based_response_format_still_upgrades_legacy_th
                     "schema": {"type": "object", "properties": {"result": {"type": "string"}}},
                 },
             },
-            "thinking": {"type": "enabled", "budget_tokens": 4096},
+            "thinking": {"type": "enabled", "budget_tokens": 4096, "block_binding": BLOCK_BINDING},
             "max_tokens": 8192,
         },
         optional_params={},
@@ -993,7 +993,7 @@ def test_bedrock_chat_invoke_tool_based_response_format_still_upgrades_legacy_th
     )
 
     assert "tools" in result
-    assert result["thinking"] == {"type": "adaptive"}
+    assert result["thinking"] == {"type": "adaptive", "block_binding": BLOCK_BINDING}
     assert result["output_config"] == {"effort": "high"}
 
 

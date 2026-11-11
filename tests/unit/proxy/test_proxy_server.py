@@ -317,12 +317,18 @@ def client_no_auth(fake_env_vars):
     # Assuming litellm.proxy.proxy_server is an object
     from litellm.proxy.proxy_server import cleanup_router_config_variables
 
+    app.dependency_overrides.clear()
     cleanup_router_config_variables()
     filepath = os.path.dirname(os.path.abspath(__file__))
     config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
     # initialize can get run in parallel, it sets specific variables for the fast api app, sinc eit gets run in parallel different tests use the wrong variables
     asyncio.run(initialize(config=config_fp, debug=True))
-    return TestClient(app)
+    client = TestClient(app)
+    try:
+        yield client
+    finally:
+        client.close()
+        app.dependency_overrides.clear()
 
 
 @mock_patch_acompletion()

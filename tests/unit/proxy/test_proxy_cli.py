@@ -2647,6 +2647,18 @@ class TestRunServerDbSetup:
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.build_request_log_indexes")
     @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
+    @pytest.mark.parametrize(
+        ("arguments", "env", "exits"),
+        [
+            ((), {}, True),
+            (("--enforce_prisma_migration_check",), {}, True),
+            ((), {"ENFORCE_PRISMA_MIGRATION_CHECK": "true"}, True),
+            (("--no-enforce_prisma_migration_check",), {}, True),
+            ((), {"ENFORCE_PRISMA_MIGRATION_CHECK": "false"}, True),
+            ((), {"ENFORCE_PRISMA_MIGRATION_CHECK": "0"}, True),
+        ],
+        ids=("default", "flag", "env-true", "no-flag", "env-false", "env-0"),
+    )
     @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
     def test_startup_fails_when_db_setup_fails(
         self,
@@ -2656,6 +2668,10 @@ class TestRunServerDbSetup:
         mock_setup_database,
         mock_atexit_register,
         mock_subprocess_run,
+        arguments,
+        env,
+        exits,
+        capsys,
     ):
         """Test that proxy exits with code 1 when PrismaManager.setup_database returns False, with no opt-in flag"""
         from litellm.proxy.proxy_cli import run_server
@@ -2674,12 +2690,13 @@ class TestRunServerDbSetup:
         clean_env = {
             k: v
             for k, v in os.environ.items()
-            if k not in ("DATABASE_URL", "DIRECT_URL")
+            if k not in ("DATABASE_URL", "DIRECT_URL", "ENFORCE_PRISMA_MIGRATION_CHECK")
         }
         clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
+        assert exits is True
 
         with (
-            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(os.environ, {**clean_env, **env}, clear=True),
             patch.dict(
                 "sys.modules",
                 {
@@ -2696,11 +2713,11 @@ class TestRunServerDbSetup:
                 "host": "localhost",
                 "port": 8000,
             }
-
             with pytest.raises(SystemExit) as exc_info:
-                run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
-            assert exc_info.value.code == 1
-            mock_setup_database.assert_called_once_with(use_migrate=True, use_v2_resolver=True)
+                run_server.main(["--local", "--skip_server_startup", *arguments], standalone_mode=False)
+
+        assert exc_info.value.code == 1
+        mock_setup_database.assert_called_once_with(use_migrate=True, use_v2_resolver=True)
 
     @patch("subprocess.run")
     @patch("atexit.register")

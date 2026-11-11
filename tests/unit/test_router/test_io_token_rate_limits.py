@@ -280,6 +280,59 @@ class TestModelRateLimitingCheckIOTokens:
         assert current == 0
 
     @pytest.mark.asyncio
+    async def test_io_reservation_uses_litellm_metadata_when_provider_metadata_exists(self):
+        dual_cache = DualCache()
+        deployment = {
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "itpm": 100,
+                "otpm": 50,
+            },
+            "model_info": {"id": "io-metadata-isolation-id"},
+        }
+        provider_metadata = {"customer_id": "cust-123"}
+        internal_metadata = {"model_group": "restricted-model"}
+        request_kwargs = {
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 10,
+            "metadata": provider_metadata,
+            "litellm_metadata": internal_metadata,
+        }
+        set_io_token_rate_limit_request_kwargs(request_kwargs)
+
+        await async_io_token_pre_call_check(dual_cache, deployment)
+
+        assert request_kwargs["metadata"] == provider_metadata
+        assert request_kwargs["litellm_metadata"][ITPM_RESERVED_KEY] > 0
+        assert request_kwargs["litellm_metadata"][OTPM_RESERVED_KEY] == 10
+        assert ITPM_RESERVED_KEY not in request_kwargs["metadata"]
+        assert OTPM_RESERVED_KEY not in request_kwargs["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_io_reconcile_reads_nested_litellm_metadata(self):
+        dual_cache = DualCache()
+        itpm_key = "global_router:io-nested-metadata:openai/gpt-4o-mini:itpm:00-00"
+        await dual_cache.async_increment_cache(key=itpm_key, value=10, ttl=60)
+        reservation = {ITPM_RESERVED_KEY: 10, ITPM_CACHE_KEY: itpm_key}
+        kwargs = {
+            "metadata": {"customer_id": "cust-123"},
+            "litellm_params": {
+                "metadata": {"provider_field": "value"},
+                "litellm_metadata": dict(reservation),
+            },
+        }
+        response = ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": "ok"}, "index": 0, "finish_reason": "stop"}],
+            usage=Usage(prompt_tokens=4, completion_tokens=0, total_tokens=4),
+        )
+
+        await async_io_token_reconcile_success(dual_cache, kwargs, response)
+
+        assert await dual_cache.async_get_cache(key=itpm_key) == 4
+        assert kwargs["metadata"] == {"customer_id": "cust-123"}
+        assert ITPM_RESERVED_KEY not in kwargs["litellm_params"]["litellm_metadata"]
+
+    @pytest.mark.asyncio
     async def test_reconcile_tracks_actual_usage_when_estimate_zero(self):
         from litellm.utils import get_utc_datetime
 

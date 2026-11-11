@@ -4148,16 +4148,6 @@ _CONSTRAINED_SCHEMA: Final = {
     "required": ["summary", "kind"],
     "additionalProperties": False,
 }
-_ANTHROPIC_MESSAGE: Final = {
-    "id": "msg_scripted",
-    "type": "message",
-    "role": "assistant",
-    "model": "claude-scripted",
-    "content": [{"type": "text", "text": '{"summary": "sunny", "kind": 1}'}],
-    "stop_reason": "end_turn",
-    "stop_sequence": None,
-    "usage": {"input_tokens": 1, "output_tokens": 1},
-}
 _THINKING_HISTORY: Final = (
     {"role": "user", "content": "Describe the weather."},
     {
