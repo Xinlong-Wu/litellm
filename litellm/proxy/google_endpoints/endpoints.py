@@ -36,8 +36,9 @@ class _GoogleCountTokensSystemInstruction(BaseModel):
 
     @field_validator("parts", mode="before")
     @classmethod
-    def normalize_parts(cls, parts: object) -> object:
-        return (parts,) if isinstance(parts, Mapping) else parts
+    def normalize_single_part(cls, value: object) -> object:
+        """Google accepts both a single Part object and an array of Parts."""
+        return (value,) if isinstance(value, Mapping) else value
 
 
 class _GoogleCountTokensFunctionDeclaration(BaseModel):
@@ -59,7 +60,13 @@ class _GoogleCountTokensRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore", populate_by_name=True)
     contents: tuple[Mapping[str, JsonValue], ...] = ()
     system_instruction: _GoogleCountTokensSystemInstruction | None = Field(default=None, alias="systemInstruction")
-    tools: tuple[_GoogleCountTokensTool, ...] | None = ()
+    tools: tuple[_GoogleCountTokensTool, ...] = ()
+
+    @field_validator("tools", mode="before")
+    @classmethod
+    def normalize_optional_tools(cls, value: object) -> object:
+        """Treat the optional JSON `tools: null` spelling as an empty tool list."""
+        return () if value is None else value
 
 
 router: Final = APIRouter(
@@ -119,7 +126,7 @@ def _google_count_tokens_request(model_name: str, data: object) -> TokenCountReq
         if validated_data.system_instruction is not None
         else None
     )
-    declarations: Final = chain.from_iterable(tool.function_declarations for tool in validated_data.tools or ())
+    declarations: Final = chain.from_iterable(tool.function_declarations for tool in validated_data.tools)
     tools: Final = [
         {
             "name": declaration.name,
@@ -572,7 +579,7 @@ async def cancel_interaction(
     """
     Cancel an interaction by ID.
 
-    Per OpenAPI spec: POST /{api_version}/interactions/{interaction_id}:cancel
+    Per OpenAPI spec: POST /{api_version}/interactions/{interaction_id}/cancel
     """
     from litellm.proxy.proxy_server import (
         general_settings,
