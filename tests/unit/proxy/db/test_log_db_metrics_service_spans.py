@@ -21,10 +21,9 @@ import litellm
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
+from litellm.integrations.prometheus_services import PrometheusServicesLogger
 from litellm.proxy.db.log_db_metrics import log_db_metrics
 from litellm.proxy.db.prisma_client import _PrismaDrainTracker, _TrackedPrismaEngine
-from litellm.proxy.proxy_server import proxy_logging_obj
-from litellm.integrations.prometheus_services import PrometheusServicesLogger
 from prometheus_client import REGISTRY
 
 
@@ -70,6 +69,8 @@ def _discard_periodic_flush(coroutine: object) -> None:
 
 @pytest.fixture
 def rig(monkeypatch: pytest.MonkeyPatch) -> _Rig:
+    from litellm.proxy import proxy_server
+
     monkeypatch.setenv("DD_API_KEY", "test_api_key")
     monkeypatch.setenv("DD_SITE", "test.datadoghq.com")
     monkeypatch.setattr(litellm, "datadog_params", None)
@@ -80,7 +81,14 @@ def rig(monkeypatch: pytest.MonkeyPatch) -> _Rig:
     with patch("asyncio.create_task", side_effect=_discard_periodic_flush):
         datadog: Final = DataDogLogger()
     service_logging: Final = ServiceLogging()
-    monkeypatch.setattr(proxy_logging_obj, "service_logging_obj", service_logging)
+    # log_db_metrics resolves proxy_logging_obj while a decorated call runs.
+    # Other proxy-infra tests can replace that module global, so install an
+    # isolated object on the module itself instead of mutating a stale import.
+    monkeypatch.setattr(
+        proxy_server,
+        "proxy_logging_obj",
+        SimpleNamespace(service_logging_obj=service_logging),
+    )
     monkeypatch.setattr(litellm, "service_callback", [otel, datadog, "prometheus_system"])
     monkeypatch.setattr(service_logging, "dd_logger", datadog, raising=False)
     monkeypatch.setattr(

@@ -42,11 +42,6 @@ from fastapi.testclient import TestClient
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.proxy.proxy_server import (  # Replace with the actual module where your FastAPI router is defined
-    app,
-    initialize,
-    save_worker_config,
-)
 from litellm.proxy.utils import ProxyLogging
 
 @pytest.fixture
@@ -314,21 +309,23 @@ def fake_env_vars(monkeypatch):
 
 @pytest.fixture(scope="function")
 def client_no_auth(fake_env_vars):
-    # Assuming litellm.proxy.proxy_server is an object
-    from litellm.proxy.proxy_server import cleanup_router_config_variables
+    # Some proxy-infra tests reload proxy_server. Resolve the app and initializer at
+    # fixture setup time so the client and dependency overrides always use the
+    # current module-level FastAPI app rather than a pre-reload binding.
+    from litellm.proxy import proxy_server
 
-    app.dependency_overrides.clear()
-    cleanup_router_config_variables()
+    proxy_server.app.dependency_overrides.clear()
+    proxy_server.cleanup_router_config_variables()
     filepath = os.path.dirname(os.path.abspath(__file__))
     config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
     # initialize can get run in parallel, it sets specific variables for the fast api app, sinc eit gets run in parallel different tests use the wrong variables
-    asyncio.run(initialize(config=config_fp, debug=True))
-    client = TestClient(app)
+    asyncio.run(proxy_server.initialize(config=config_fp, debug=True))
+    client = TestClient(proxy_server.app)
     try:
         yield client
     finally:
         client.close()
-        app.dependency_overrides.clear()
+        proxy_server.app.dependency_overrides.clear()
 
 
 @mock_patch_acompletion()
