@@ -56,6 +56,7 @@ COPY --from=uvbin /uvx /usr/local/bin/uvx
 
 RUN apk add --no-cache \
     bash \
+    curl \
     gcc \
     python-3.13 \
     python-3.13-dev \
