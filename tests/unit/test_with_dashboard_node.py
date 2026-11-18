@@ -25,6 +25,14 @@ def _fake_node(bin_dir: Path, version: str) -> Path:
     return bin_dir
 
 
+def _fake_missing_node(bin_dir: Path) -> Path:
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    node = bin_dir / "node"
+    node.write_text("#!/bin/sh\nexit 127\n")
+    node.chmod(0o755)
+    return bin_dir
+
+
 def _run(bin_dirs: list[Path], home: Path) -> subprocess.CompletedProcess[str]:
     path = os.pathsep.join([*(str(b) for b in bin_dirs), "/usr/bin", "/bin"])
     home.mkdir(parents=True, exist_ok=True)
@@ -61,7 +69,7 @@ def test_old_node_without_any_manager_fails_with_instructions(tmp_path):
 
 
 def test_missing_node_without_any_manager_fails_with_instructions(tmp_path):
-    proc = _run([], tmp_path / "home")
+    proc = _run([_fake_missing_node(tmp_path / "bin")], tmp_path / "home")
     assert proc.returncode == 1
     assert "missing" in proc.stderr
 
@@ -72,9 +80,7 @@ def test_old_node_switches_via_nvm_when_present(tmp_path):
     home = tmp_path / "home"
     nvm_dir = home / ".nvm"
     nvm_dir.mkdir(parents=True)
-    (nvm_dir / "nvm.sh").write_text(
-        f'nvm() {{ [ "$1" = use ] && PATH="{new}:$PATH"; return 0; }}\n'
-    )
+    (nvm_dir / "nvm.sh").write_text(f'nvm() {{ [ "$1" = use ] && PATH="{new}:$PATH"; return 0; }}\n')
     proc = _run([old], home)
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == "v99.0.0"
@@ -85,9 +91,7 @@ def test_old_node_switches_via_fnm_when_nvm_is_absent(tmp_path):
     old = _fake_node(tmp_path / "old-bin", _bump_major(_floor(), -1))
     new = _fake_node(tmp_path / "new-bin", "99.0.0")
     fnm = tmp_path / "old-bin" / "fnm"
-    fnm.write_text(
-        f'#!/bin/sh\n[ "$1" = env ] && echo \'export PATH="{new}:$PATH"\'\nexit 0\n'
-    )
+    fnm.write_text(f'#!/bin/sh\n[ "$1" = env ] && echo \'export PATH="{new}:$PATH"\'\nexit 0\n')
     fnm.chmod(0o755)
     proc = _run([old], tmp_path / "home")
     assert proc.returncode == 0, proc.stderr

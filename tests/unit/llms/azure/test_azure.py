@@ -337,7 +337,6 @@ def test_azure_openai_gpt_4o_naming(monkeypatch):
     ],
 )
 def test_azure_gpt_4o_with_tool_call_and_response_format(api_version):
-    from litellm import completion
     from typing import Optional
     from pydantic import BaseModel
     import litellm
@@ -607,7 +606,6 @@ def test_azure_with_content_safety_error():
     """
     Verify user can access innererror from the Azure OpenAI exception
     """
-    from litellm import completion
     from litellm.exceptions import ContentPolicyViolationError
     from litellm.litellm_core_utils.exception_mapping_utils import exception_type
     from unittest.mock import MagicMock

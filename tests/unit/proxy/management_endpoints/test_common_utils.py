@@ -187,9 +187,7 @@ class TestUpdateMetadataFieldsEmptyCollections:
         }
         update_metadata_fields(updated_kv=updated_kv)
         # The fields should have been moved into metadata
-        assert (
-            "guardrails" not in updated_kv
-        ), "guardrails should be popped from top-level"
+        assert "guardrails" not in updated_kv, "guardrails should be popped from top-level"
         assert "policies" not in updated_kv, "policies should be popped from top-level"
         assert updated_kv["metadata"]["guardrails"] == []
         assert updated_kv["metadata"]["policies"] == []
@@ -386,22 +384,18 @@ class TestOrgAdminCanInviteUser:
             (["org1"], [], False),
         ],
     )
-    def test_org_admin_can_invite_user_parametrized(
-        self, admin_orgs, target_orgs, expected
-    ):
+    def test_org_admin_can_invite_user_parametrized(self, admin_orgs, target_orgs, expected):
         """Parametrized test: can invite when target is in org where admin has ORG_ADMIN role."""
         admin_user = LiteLLM_UserTable(
             user_id="admin",
             organization_memberships=[
-                self._make_membership(oid, LitellmUserRoles.ORG_ADMIN.value)
-                for oid in admin_orgs
+                self._make_membership(oid, LitellmUserRoles.ORG_ADMIN.value) for oid in admin_orgs
             ],
         )
         target_user = LiteLLM_UserTable(
             user_id="target",
             organization_memberships=[
-                self._make_membership(oid, LitellmUserRoles.INTERNAL_USER.value)
-                for oid in target_orgs
+                self._make_membership(oid, LitellmUserRoles.INTERNAL_USER.value) for oid in target_orgs
             ],
         )
         assert _org_admin_can_invite_user(admin_user, target_user) == expected
@@ -435,9 +429,7 @@ class TestTeamAdminCanInviteUser:
             (["t1"], ["t2"], ["t1"], False),
         ],
     )
-    async def test_team_admin_can_invite_user_parametrized(
-        self, admin_teams, target_teams, user_is_admin_in, expected
-    ):
+    async def test_team_admin_can_invite_user_parametrized(self, admin_teams, target_teams, user_is_admin_in, expected):
         """Parametrized test: can invite when target shares a team where user is admin."""
         mock_prisma = MagicMock()
         mock_auth = MagicMock()
@@ -558,9 +550,7 @@ class TestSetObjectMetadataField:
             ("model_rpm_limit", {"gpt-4": 10}, False),
         ],
     )
-    def test_set_object_metadata_field_parametrized(
-        self, field_name, value, should_call_premium
-    ):
+    def test_set_object_metadata_field_parametrized(self, field_name, value, should_call_premium):
         """Parametrized test: premium fields trigger _premium_user_check."""
         team = LiteLLM_TeamTable(team_id="t1", metadata={})
         with patch(
@@ -697,9 +687,7 @@ class TestValidateFiniteSpendErrorDetail:
         with pytest.raises(HTTPException) as exc_info:
             validate_finite_spend(float("nan"))
 
-        assert exc_info.value.detail == {
-            "error": "spend must be a finite number. Received: nan"
-        }
+        assert exc_info.value.detail == {"error": "spend must be a finite number. Received: nan"}
 
 
 class TestValidateBudgetDuration:
@@ -781,9 +769,7 @@ class TestCheckPassthroughRoutesCallerPermission:
     metadata); non-admins get a 403 naming the entity."""
 
     def _non_admin(self):
-        return UserAPIKeyAuth(
-            user_id="u1", api_key="sk-x", user_role=LitellmUserRoles.INTERNAL_USER
-        )
+        return UserAPIKeyAuth(user_id="u1", api_key="sk-x", user_role=LitellmUserRoles.INTERNAL_USER)
 
     def test_top_level_routes_rejected_with_default_entity(self):
         from fastapi import HTTPException
@@ -802,9 +788,7 @@ class TestCheckPassthroughRoutesCallerPermission:
             check_passthrough_routes_caller_permission(data, self._non_admin())
 
         assert exc_info.value.status_code == 403
-        assert exc_info.value.detail == {
-            "error": "Only proxy admins can set `allowed_passthrough_routes` on a key."
-        }
+        assert exc_info.value.detail == {"error": "Only proxy admins can set `allowed_passthrough_routes` on a key."}
 
     def test_metadata_routes_rejected_with_default_entity(self):
         from fastapi import HTTPException
@@ -1178,9 +1162,7 @@ class TestUserHasAdminPrivilegesGuard:
     @pytest.mark.asyncio
     async def test_no_user_lookup_when_prisma_is_none(self):
         """With no DB the guard short-circuits before any user lookup."""
-        auth = UserAPIKeyAuth(
-            user_id="user1", api_key="sk-x", user_role=LitellmUserRoles.INTERNAL_USER
-        )
+        auth = UserAPIKeyAuth(user_id="user1", api_key="sk-x", user_role=LitellmUserRoles.INTERNAL_USER)
         mock_get_user = AsyncMock(return_value=None)
         with patch("litellm.proxy.auth.auth_checks.get_user_object", mock_get_user):
             result = await user_has_admin_privileges(
@@ -1192,9 +1174,7 @@ class TestUserHasAdminPrivilegesGuard:
     @pytest.mark.asyncio
     async def test_org_admin_membership_grants_privileges(self):
         """With DB + user_id present, an ORG_ADMIN membership yields True."""
-        auth = UserAPIKeyAuth(
-            user_id="user1", api_key="sk-x", user_role=LitellmUserRoles.INTERNAL_USER
-        )
+        auth = UserAPIKeyAuth(user_id="user1", api_key="sk-x", user_role=LitellmUserRoles.INTERNAL_USER)
         now = datetime.now(timezone.utc)
         user_obj = LiteLLM_UserTable(
             user_id="user1",
@@ -1219,9 +1199,7 @@ class TestUserHasAdminPrivilegesGuard:
 class TestAdminCanInviteUserGuard:
     @pytest.mark.asyncio
     async def test_no_user_lookup_when_prisma_is_none(self):
-        auth = UserAPIKeyAuth(
-            user_id="admin1", api_key="sk-x", user_role=LitellmUserRoles.INTERNAL_USER
-        )
+        auth = UserAPIKeyAuth(user_id="admin1", api_key="sk-x", user_role=LitellmUserRoles.INTERNAL_USER)
         mock_get_user = AsyncMock(return_value=None)
         with patch("litellm.proxy.auth.auth_checks.get_user_object", mock_get_user):
             result = await admin_can_invite_user(
@@ -1235,9 +1213,7 @@ class TestAdminCanInviteUserGuard:
     @pytest.mark.asyncio
     async def test_org_admin_can_invite_user_in_shared_org(self):
         now = datetime.now(timezone.utc)
-        auth = UserAPIKeyAuth(
-            user_id="admin1", api_key="sk-x", user_role=LitellmUserRoles.INTERNAL_USER
-        )
+        auth = UserAPIKeyAuth(user_id="admin1", api_key="sk-x", user_role=LitellmUserRoles.INTERNAL_USER)
 
         def membership(role):
             return LiteLLM_OrganizationMembershipTable(
@@ -1398,9 +1374,7 @@ class TestUpdateMetadataFieldsPremiumCheck:
         "litellm.proxy.management_endpoints.common_utils.premium_user_check",
         side_effect=Exception("Should not be called"),
     )
-    def test_empty_string_team_member_key_duration_skips_premium_check(
-        self, mock_check
-    ):
+    def test_empty_string_team_member_key_duration_skips_premium_check(self, mock_check):
         """team_member_key_duration: '' should NOT trigger premium user check."""
         updated_kv = {
             "team_id": "team-123",
@@ -1413,9 +1387,7 @@ class TestUpdateMetadataFieldsPremiumCheck:
         "litellm.proxy.management_endpoints.common_utils.premium_user_check",
         side_effect=Exception("Should not be called"),
     )
-    def test_full_ui_payload_with_empty_premium_fields_skips_premium_check(
-        self, mock_check
-    ):
+    def test_full_ui_payload_with_empty_premium_fields_skips_premium_check(self, mock_check):
         """A realistic UI payload with all empty premium fields should not 403."""
         updated_kv = {
             "team_id": "team-123",
@@ -1458,9 +1430,7 @@ class TestUpdateMetadataFieldsPremiumCheck:
     @patch(
         "litellm.proxy.management_endpoints.common_utils.premium_user_check",
     )
-    def test_non_empty_team_member_key_duration_triggers_premium_check(
-        self, mock_check
-    ):
+    def test_non_empty_team_member_key_duration_triggers_premium_check(self, mock_check):
         """team_member_key_duration: '30d' SHOULD trigger premium user check."""
         updated_kv = {
             "team_id": "team-123",

@@ -89,6 +89,12 @@ class _GoogleCountTokensSystemInstruction(BaseModel):
         _GOOGLE_REPEATED_FIELD,
     ] = ()
 
+    @field_validator("parts", mode="before")
+    @classmethod
+    def normalize_single_part(cls, value: object) -> object:
+        """Google accepts both a single Part object and an array of Parts."""
+        return (value,) if isinstance(value, Mapping) else value
+
 
 class _GoogleCountTokensFunctionDeclaration(BaseModel):
     model_config = ConfigDict(frozen=True, populate_by_name=True)
@@ -110,6 +116,12 @@ class _GoogleCountTokensRequest(BaseModel):
     contents: Annotated[tuple[Mapping[str, JsonValue], ...], BeforeValidator(_google_contents)] = ()
     system_instruction: _GoogleCountTokensSystemInstruction | None = Field(default=None, alias="systemInstruction")
     tools: Annotated[tuple[_GoogleCountTokensTool, ...], _GOOGLE_REPEATED_FIELD] = ()
+
+    @field_validator("tools", mode="before")
+    @classmethod
+    def normalize_optional_tools(cls, value: object) -> object:
+        """Treat the optional JSON `tools: null` spelling as an empty tool list."""
+        return () if value is None else value
 
 
 router: Final = APIRouter(

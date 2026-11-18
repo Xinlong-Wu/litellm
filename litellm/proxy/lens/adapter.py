@@ -31,6 +31,15 @@ router: Final = APIRouter(prefix="/lens", tags=["Lens"], route_class=LensRoute)
 PUBLIC_CONTRACT: Final = 1
 _REQUEST_HEADERS: Final = frozenset({"content-type", "x-lens-contract", "idempotency-key"})
 _RESPONSE_HEADERS: Final = frozenset({"content-type", "content-disposition", "retry-after", "x-lens-contract"})
+_LENS_REQUEST_BODY: Final = {
+    "content": {"application/json": {"schema": {"type": "object", "additionalProperties": True}}}
+}
+_LENS_RESPONSES: Final = {
+    200: {
+        "description": "The JSON response returned by the configured Lens service.",
+        "content": {"application/json": {"schema": {"type": "object", "additionalProperties": True}}},
+    }
+}
 
 
 class Identity(BaseModel):
@@ -194,13 +203,26 @@ async def forward(
         raise
 
 
-@router.api_route("", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
-@router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+@router.api_route(
+    "",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    description="Forward a Lens JSON request to the configured Lens service.",
+    openapi_extra={"requestBody": _LENS_REQUEST_BODY},
+    responses=_LENS_RESPONSES,
+)
+@router.api_route(
+    "/{path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    description="Forward a Lens JSON request to the configured Lens service.",
+    openapi_extra={"requestBody": _LENS_REQUEST_BODY},
+    responses=_LENS_RESPONSES,
+)
 async def lens_request(
     request: Request,
     identity: Annotated[Identity, Depends(delegated_identity)],
     path: str = "",
 ) -> Response:
+    """Forward a Lens API request while preserving its delegated identity and response."""
     connection: Final = Connection.from_env()
     if connection is None:
         raise HTTPException(503, "Configure LITELLM_LENS_URL and LENS_GATEWAY_SECRET for the Lens service")

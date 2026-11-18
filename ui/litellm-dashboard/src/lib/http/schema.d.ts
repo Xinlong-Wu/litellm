@@ -9343,17 +9343,32 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Lens Request */
+        /**
+         * Lens Request
+         * @description Forward a Lens JSON request to the configured Lens service.
+         */
         get: operations["lens_request_lens_get"];
-        /** Lens Request */
+        /**
+         * Lens Request
+         * @description Forward a Lens JSON request to the configured Lens service.
+         */
         put: operations["lens_request_lens_put"];
-        /** Lens Request */
+        /**
+         * Lens Request
+         * @description Forward a Lens JSON request to the configured Lens service.
+         */
         post: operations["lens_request_lens_post"];
-        /** Lens Request */
+        /**
+         * Lens Request
+         * @description Forward a Lens JSON request to the configured Lens service.
+         */
         delete: operations["lens_request_lens_delete"];
         options?: never;
         head?: never;
-        /** Lens Request */
+        /**
+         * Lens Request
+         * @description Forward a Lens JSON request to the configured Lens service.
+         */
         patch: operations["lens_request_lens_patch"];
         trace?: never;
     };
@@ -9381,17 +9396,32 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Lens Request */
+        /**
+         * Lens Request
+         * @description Forward a Lens JSON request to the configured Lens service.
+         */
         get: operations["lens_request_lens__path__get"];
-        /** Lens Request */
+        /**
+         * Lens Request
+         * @description Forward a Lens JSON request to the configured Lens service.
+         */
         put: operations["lens_request_lens__path__put"];
-        /** Lens Request */
+        /**
+         * Lens Request
+         * @description Forward a Lens JSON request to the configured Lens service.
+         */
         post: operations["lens_request_lens__path__post"];
-        /** Lens Request */
+        /**
+         * Lens Request
+         * @description Forward a Lens JSON request to the configured Lens service.
+         */
         delete: operations["lens_request_lens__path__delete"];
         options?: never;
         head?: never;
-        /** Lens Request */
+        /**
+         * Lens Request
+         * @description Forward a Lens JSON request to the configured Lens service.
+         */
         patch: operations["lens_request_lens__path__patch"];
         trace?: never;
     };
@@ -28792,6 +28822,13 @@ export interface components {
              */
             max_parallel_requests?: number | null;
             /**
+             * Model Group Max Budget
+             * @description Max budget for each access group / model group (e.g. {'premium-models': {'max_budget': 50, 'budget_duration': '30d'}}). Spend across every model in the access group accrues to one cap.
+             */
+            model_group_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
+            /**
              * Model Max Budget
              * @description Max budget for each model (e.g. {'gpt-4o': {'max_budget': '0.0000001', 'budget_duration': '1d', 'tpm_limit': 1000, 'rpm_limit': 1000}})
              */
@@ -28902,6 +28939,10 @@ export interface components {
              */
             metadata: {
                 [key: string]: unknown;
+            } | null;
+            /** Model Group Max Budget */
+            model_group_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
             } | null;
             /**
              * Model Max Budget
@@ -35437,6 +35478,10 @@ export interface components {
             max_budget?: number | null;
             /** Max Parallel Requests */
             max_parallel_requests?: number | null;
+            /** Model Group Max Budget */
+            model_group_max_budget?: {
+                [key: string]: unknown;
+            } | null;
             /** Model Max Budget */
             model_max_budget?: {
                 [key: string]: unknown;
@@ -35476,6 +35521,10 @@ export interface components {
             max_budget?: number | null;
             /** Max Parallel Requests */
             max_parallel_requests?: number | null;
+            /** Model Group Max Budget */
+            model_group_max_budget?: {
+                [key: string]: unknown;
+            } | null;
             /** Model Max Budget */
             model_max_budget?: {
                 [key: string]: unknown;
@@ -37327,6 +37376,13 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /**
+             * Model Group Max Budget
+             * @default {}
+             */
+            model_group_max_budget: {
+                [key: string]: unknown;
+            } | null;
+            /**
              * Model Max Budget
              * @default {}
              */
@@ -37421,6 +37477,13 @@ export interface components {
             max_parallel_requests?: number | null;
             /** Metadata */
             metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Model Group Max Budget
+             * @default {}
+             */
+            model_group_max_budget: {
                 [key: string]: unknown;
             } | null;
             /**
@@ -40096,6 +40159,13 @@ export interface components {
              */
             max_parallel_requests?: number | null;
             /**
+             * Model Group Max Budget
+             * @description Max budget for each access group / model group (e.g. {'premium-models': {'max_budget': 50, 'budget_duration': '30d'}}). Spend across every model in the access group accrues to one cap.
+             */
+            model_group_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
+            /**
              * Model Max Budget
              * @description Max budget for each model (e.g. {'gpt-4o': {'max_budget': '0.0000001', 'budget_duration': '1d', 'tpm_limit': 1000, 'rpm_limit': 1000}})
              */
@@ -40313,6 +40383,10 @@ export interface components {
             metadata?: {
                 [key: string]: unknown;
             } | null;
+            /** Model Group Max Budget */
+            model_group_max_budget?: {
+                [key: string]: unknown;
+            } | null;
             /** Model Max Budget */
             model_max_budget?: {
                 [key: string]: unknown;
@@ -40424,6 +40498,10 @@ export interface components {
             max_parallel_requests?: number | null;
             /** Metadata */
             metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Group Max Budget */
+            model_group_max_budget?: {
                 [key: string]: unknown;
             } | null;
             /** Model Itpm Limit */
@@ -40661,6 +40739,10 @@ export interface components {
             team_member_budget_duration?: string | null;
             /** Team Member Key Duration */
             team_member_key_duration?: string | null;
+            /** Team Member Model Group Max Budget */
+            team_member_model_group_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
             /** Team Member Model Max Budget */
             team_member_model_max_budget?: {
                 [key: string]: components["schemas"]["BudgetConfig"];
@@ -40736,6 +40818,10 @@ export interface components {
              */
             metadata: {
                 [key: string]: unknown;
+            } | null;
+            /** Model Group Max Budget */
+            model_group_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
             } | null;
             /**
              * Model Max Budget
@@ -40911,6 +40997,10 @@ export interface components {
              * @default {}
              */
             metadata: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Group Max Budget */
+            model_group_max_budget?: {
                 [key: string]: unknown;
             } | null;
             /** Model Max Budget */
@@ -41951,6 +42041,10 @@ export interface components {
             team_member_budget_duration?: string | null;
             /** Team Member Key Duration */
             team_member_key_duration?: string | null;
+            /** Team Member Model Group Max Budget */
+            team_member_model_group_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
             /** Team Member Model Max Budget */
             team_member_model_max_budget?: {
                 [key: string]: components["schemas"]["BudgetConfig"];
@@ -50468,6 +50562,10 @@ export interface components {
             metadata?: {
                 [key: string]: unknown;
             } | null;
+            /** Model Group Max Budget */
+            model_group_max_budget?: {
+                [key: string]: unknown;
+            } | null;
             /** Model Itpm Limit */
             model_itpm_limit?: {
                 [key: string]: number;
@@ -50738,6 +50836,10 @@ export interface components {
             team_member_budget_duration?: string | null;
             /** Team Member Key Duration */
             team_member_key_duration?: string | null;
+            /** Team Member Model Group Max Budget */
+            team_member_model_group_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
             /** Team Member Model Max Budget */
             team_member_model_max_budget?: {
                 [key: string]: components["schemas"]["BudgetConfig"];
@@ -50816,6 +50918,10 @@ export interface components {
             /** Metadata */
             metadata?: {
                 [key: string]: unknown;
+            } | null;
+            /** Model Group Max Budget */
+            model_group_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
             } | null;
             /**
              * Model Max Budget
@@ -50922,6 +51028,10 @@ export interface components {
             /** Metadata */
             metadata?: {
                 [key: string]: unknown;
+            } | null;
+            /** Model Group Max Budget */
+            model_group_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
             } | null;
             /**
              * Model Max Budget
@@ -51501,6 +51611,10 @@ export interface components {
             user_id?: string | null;
             /** User Max Budget */
             user_max_budget?: number | null;
+            /** User Model Group Max Budget */
+            user_model_group_max_budget?: {
+                [key: string]: unknown;
+            } | null;
             /** User Model Max Budget */
             user_model_max_budget?: {
                 [key: string]: unknown;
@@ -66183,15 +66297,23 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
-            /** @description Successful Response */
+            /** @description The JSON response returned by the configured Lens service. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -66214,15 +66336,23 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
-            /** @description Successful Response */
+            /** @description The JSON response returned by the configured Lens service. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -66245,15 +66375,23 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
-            /** @description Successful Response */
+            /** @description The JSON response returned by the configured Lens service. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -66276,15 +66414,23 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
-            /** @description Successful Response */
+            /** @description The JSON response returned by the configured Lens service. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -66307,15 +66453,23 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
-            /** @description Successful Response */
+            /** @description The JSON response returned by the configured Lens service. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -66358,15 +66512,23 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
-            /** @description Successful Response */
+            /** @description The JSON response returned by the configured Lens service. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -66389,15 +66551,23 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
-            /** @description Successful Response */
+            /** @description The JSON response returned by the configured Lens service. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -66420,15 +66590,23 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
-            /** @description Successful Response */
+            /** @description The JSON response returned by the configured Lens service. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -66451,15 +66629,23 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
-            /** @description Successful Response */
+            /** @description The JSON response returned by the configured Lens service. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -66482,15 +66668,23 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
-            /** @description Successful Response */
+            /** @description The JSON response returned by the configured Lens service. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */

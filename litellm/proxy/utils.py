@@ -1715,8 +1715,6 @@ _PROXY_ONLY_ERROR_LOGGED_FIELDS: Final = frozenset(
     {"model", "messages", "input", "prompt", "user", "stream", "litellm_call_id"}
 )
 _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "update_data", "delete_data"))
-
-
 _EXCEPTION_CHAIN_MAX_DEPTH: Final = 16
 
 

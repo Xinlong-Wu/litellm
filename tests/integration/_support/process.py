@@ -39,6 +39,9 @@ from tests.integration._support.workers import gateway_profile, replica_urls
 if TYPE_CHECKING:
     import pytest
 
+if TYPE_CHECKING:
+    import pytest
+
 DB_PUSH: Final = ("--use_prisma_db_push",)
 MIGRATE_DEPLOY: Final = ()
 LEGACY_MIGRATE_DEPLOY: Final = ("--use_legacy_migration_resolver",)

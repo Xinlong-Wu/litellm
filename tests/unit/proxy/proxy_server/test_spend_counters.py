@@ -28,6 +28,11 @@ from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
+from fakeredis import FakeAsyncRedis, FakeServer
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import StatusCode
 
 import litellm
 import litellm.proxy.proxy_server as ps

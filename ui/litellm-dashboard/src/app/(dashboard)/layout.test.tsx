@@ -213,7 +213,6 @@ describe("(dashboard) Layout", () => {
 
   it("redirects an invitation link to the onboarding route instead of rendering the dashboard shell", async () => {
     searchParamsValue = new URLSearchParams("invitation_id=abc123");
-
     render(
       <AuthProvider>
         <Layout>

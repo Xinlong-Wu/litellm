@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { z } from "zod";
 import { all_admin_roles } from "@/utils/roles";
 import BudgetDurationDropdown from "@/components/common_components/budget_duration_dropdown";
+import ModelGroupBudgetEditor from "@/components/common_components/ModelGroupBudgetEditor";
 import { ModelMaxBudget, ModelMaxBudgetField } from "@/components/key_team_helpers/ModelMaxBudgetEditor";
 import { modelMaxBudgetUpdate } from "@/components/key_team_helpers/modelMaxBudgetPayload";
 import { useSeededState } from "@/components/key_team_helpers/useSeededState";
@@ -55,6 +56,13 @@ const MCP_SELECTION_SHAPE = z.object({
   toolsets: z.array(z.string()),
 });
 
+const MODEL_GROUP_BUDGET_CONFIG_SHAPE = z.object({
+  max_budget: z.number().optional(),
+  budget_duration: z.string().optional(),
+  tpm_limit: z.number().optional(),
+  rpm_limit: z.number().optional(),
+});
+
 // The proxy stores unset user fields as null rather than leaving them out, and
 // antd forwarded whatever it was handed, so nullish is what keeps a loaded user
 // editable at all.
@@ -65,6 +73,7 @@ const userEditShape = (t: TFunction) => ({
   user_role: z.string().nullish(),
   models: z.array(z.string()),
   budget_duration: z.string().nullish(),
+  model_group_max_budget: z.record(z.string(), MODEL_GROUP_BUDGET_CONFIG_SHAPE).optional(),
   metadata: z.string().nullish(),
   tpm_limit: rateLimitField(t),
   rpm_limit: rateLimitField(t),
@@ -118,6 +127,7 @@ const toFormValues = (
     models: userData.user_info?.models || [],
     max_budget: isUnlimited ? "" : maxBudget,
     budget_duration: userData.user_info?.budget_duration,
+    ...(!isBulkEdit ? { model_group_max_budget: userData.user_info?.model_group_max_budget ?? {} } : {}),
     metadata: userData.user_info?.metadata ? JSON.stringify(userData.user_info.metadata, null, 2) : undefined,
     ...(canEditMcpPermissions ? buildMcpFieldValues(objectPermission) : {}),
   };
@@ -386,6 +396,19 @@ export function UserEditView({
               usage={userData.user_info?.model_max_budget_usage}
               hint={t("users.editView.fields.modelMaxBudgetHint")}
             />
+          )}
+
+          {!isBulkEdit && (
+            <FormField
+              control={form.control}
+              name="model_group_max_budget"
+              label={labelWithHint(
+                "Model Group Budgets",
+                "Optional. Cap this user's spend, TPM, or RPM per access group. Usage across every model in an access group shares one limit.",
+              )}
+            >
+              {({ value, onChange }) => <ModelGroupBudgetEditor value={value} onChange={onChange} />}
+            </FormField>
           )}
 
           <FormField control={form.control} name="metadata" label={t("users.editView.fields.metadata")}>

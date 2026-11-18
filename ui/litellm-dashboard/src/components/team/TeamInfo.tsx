@@ -91,6 +91,7 @@ import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMeta
 import ModelAliasManager from "../common_components/ModelAliasManager";
 import AgentSelector from "../agent_management/AgentSelector";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
+import ModelGroupBudgetEditor, { type ModelGroupBudgetValue } from "../common_components/ModelGroupBudgetEditor";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
 import GuardrailSettingsView from "../GuardrailSettingsView";
 import LoggingSettingsView from "../logging_settings_view";
@@ -350,6 +351,7 @@ export interface TeamData {
       tpm_limit: number | null;
       rpm_limit: number | null;
       model_max_budget?: StoredModelMaxBudget | null;
+      model_group_max_budget?: ModelGroupBudgetValue | null;
     } | null;
   };
   keys: any[];
@@ -371,6 +373,15 @@ export interface TeamInfoProps {
 const SUPPRESSED_BY_DESCRIPTION = "";
 
 const numericInputSchema = z.union([z.string(), z.number()]).nullish();
+const modelGroupBudgetSchema = z.record(
+  z.string(),
+  z.object({
+    max_budget: z.number().optional(),
+    budget_duration: z.string().optional(),
+    tpm_limit: z.number().optional(),
+    rpm_limit: z.number().optional(),
+  }),
+);
 
 const buildTeamUpdateFieldsSchema = (t: TFunction) =>
   z.object({
@@ -478,6 +489,7 @@ const TEAM_MEMBER_SETTINGS_FIELDS = [
   "default_team_member_models",
   "team_member_budget",
   "team_member_budget_duration",
+  "team_member_model_group_max_budget",
   "team_member_key_duration",
   "team_member_tpm_limit",
   "team_member_rpm_limit",
@@ -494,6 +506,7 @@ const EMPTY_TEAM_UPDATE_VALUES: TeamUpdateFormValues = {
   default_team_member_models: [],
   team_member_budget: undefined,
   team_member_budget_duration: undefined,
+  team_member_model_group_max_budget: {},
   team_member_key_duration: undefined,
   team_member_tpm_limit: undefined,
   team_member_rpm_limit: undefined,
@@ -546,6 +559,7 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
   default_team_member_models: info.default_team_member_models || [],
   team_member_budget: info.team_member_budget_table?.max_budget,
   team_member_budget_duration: info.team_member_budget_table?.budget_duration,
+  team_member_model_group_max_budget: info.team_member_budget_table?.model_group_max_budget ?? {},
   team_member_key_duration: info.metadata?.team_member_key_duration,
   team_member_tpm_limit: info.team_member_budget_table?.tpm_limit,
   team_member_rpm_limit: info.team_member_budget_table?.rpm_limit,
@@ -1133,6 +1147,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         values.team_member_budget !== undefined ? numberOrNull(values.team_member_budget) : undefined;
       if (newTeamMemberBudget !== undefined) {
         updateData.team_member_budget = newTeamMemberBudget;
+      }
+
+      if (values.team_member_model_group_max_budget !== undefined) {
+        updateData.team_member_model_group_max_budget = values.team_member_model_group_max_budget;
       }
 
       if (values.team_member_key_duration !== undefined) {
@@ -1810,6 +1828,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           availableModels={perModelLimitModels}
                           hint={t("teams.teamInfo.editForm.teamMemberSettings.defaultPerModelBudgetHint")}
                         />
+                        <FormField
+                          control={form.control}
+                          name="team_member_model_group_max_budget"
+                          label={labelWithHint(
+                            "Default Model Group Budgets",
+                            "Optional. Cap each member's spend, TPM, or RPM per access group. Usage across every model in the access group shares one limit and can be overridden per member.",
+                          )}
+                        >
+                          {({ value, onChange }) => <ModelGroupBudgetEditor value={value} onChange={onChange} />}
+                        </FormField>
                         <FormField
                           control={form.control}
                           name="team_member_key_duration"

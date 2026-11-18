@@ -351,7 +351,7 @@ def mapped_model_info(model: str, through_gateway: bool) -> ModelInfo | None:
 
 
 def max_output_tokens(info: ModelInfo | None, thinking: PiThinkingLevel | None) -> int | None:
-    """pi's own 16384 default plus the thinking budget LiteLLM sends for the level, within the model's output cap.
+    """Calculate pi's 16384 default plus LiteLLM's thinking budget, within the model's output cap.
     pi sends maxTokens as max_completion_tokens on every call and the gateway reserves that many tokens against the
     key's TPM limit, so the model's full output cap would starve keys with lower limits, while Anthropic budget
     thinking needs max_tokens above the budget, which is how pi sizes its own Anthropic calls."""
@@ -363,7 +363,7 @@ def max_output_tokens(info: ModelInfo | None, thinking: PiThinkingLevel | None) 
 
 
 def model_limits(info: ModelInfo | None, thinking: PiThinkingLevel | None) -> Mapping[str, int]:
-    """contextWindow from LiteLLM's model map, since pi assumes 128000 otherwise, and maxTokens per max_output_tokens."""
+    """Build contextWindow from LiteLLM's map and maxTokens from max_output_tokens for pi."""
     limits: Final = (
         ("contextWindow", info.get("max_input_tokens") if info is not None else None),
         ("maxTokens", max_output_tokens(info, thinking)),

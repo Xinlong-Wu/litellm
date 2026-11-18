@@ -14,9 +14,7 @@ import pytest
 
 sys.path.insert(
     0,
-    os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../../../litellm-proxy-extras")
-    ),
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../litellm-proxy-extras")),
 )
 
 from litellm_proxy_extras.utils import (
@@ -24,6 +22,7 @@ from litellm_proxy_extras.utils import (
     ProxyExtrasDBManager,
     _redact_command_error,
     _redact_credentials,
+    filter_hand_built_spend_logs_index_diff,
     filter_partitioned_spend_logs_diff,
 )
 
@@ -105,14 +104,12 @@ def test_coordination_failure_does_not_label_tls_failures_as_unreachable(
         ),
         (
             "postgresql://u:pw@SSL-primary:5432/db",
-            'connection failed: connection to server at "SSL-primary" (10.0.0.6), port 5432 failed: '
-            "Connection refused",
+            'connection failed: connection to server at "SSL-primary" (10.0.0.6), port 5432 failed: Connection refused',
             "ssl-primary",
         ),
         (
             "postgresql://u:pw@certificate-db.invalid:5432/db",
-            "connection failed: failed to resolve host 'certificate-db.invalid': [Errno -2] "
-            "Name or service not known",
+            "connection failed: failed to resolve host 'certificate-db.invalid': [Errno -2] Name or service not known",
             "certificate-db.invalid",
         ),
     ],
@@ -238,7 +235,6 @@ class TestIdempotentErrorDetection:
         error_message = "constraint 'fk_user_id' already exists"
         assert ProxyExtrasDBManager._is_idempotent_error(error_message) is True
 
-
     def test_is_idempotent_error_case_insensitive(self):
         """Test that idempotent error detection is case insensitive"""
         error_message = "COLUMN 'ID' ALREADY EXISTS"
@@ -279,9 +275,7 @@ class TestErrorClassificationPriority:
 
 def _get_all_migrations():
     """Return (migration_name, sql_content) pairs for all migrations."""
-    migration_files = sorted(
-        glob.glob(os.path.join(_MIGRATIONS_DIR, "*/migration.sql"))
-    )
+    migration_files = sorted(glob.glob(os.path.join(_MIGRATIONS_DIR, "*/migration.sql")))
     results = []
     for path in migration_files:
         migration_name = os.path.basename(os.path.dirname(path))
@@ -293,22 +287,24 @@ def _get_all_migrations():
 _LINE_COMMENT = re.compile(r"--.*$")
 _BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 
-_PRE_GUARD_MIGRATIONS = frozenset({
-    "20260331000000_add_prompt_environment_and_created_by",
-    "20260418000000_add_adaptive_router_tables",
-    "20260429161855_workflow_runs_tables",
-    "20260605182307_add_timeout_to_mcp_server_table",
-    "20260626120000_add_mcp_tool_search_enabled",
-    "20260629000000_add_max_concurrent_requests_to_mcp_server_table",
-    "20260710000000_add_dcr_bridge_to_mcp_server_table",
-    "20260713230852_add_key_type_to_litellm_verification_token",
-    "20260811172448_add_shadow_eval",
-    "20260813180408_add_shadow_eval_direction",
-    "20260814000000_add_proxy_worker_heartbeat",
-    "20260817143646_add_daily_guardrail_usage_units",
-    "20260818224500_add_shadow_eval_stopped_by",
-    "20260819000000_shadow_eval_max_budget",
-})
+_PRE_GUARD_MIGRATIONS = frozenset(
+    {
+        "20260331000000_add_prompt_environment_and_created_by",
+        "20260418000000_add_adaptive_router_tables",
+        "20260429161855_workflow_runs_tables",
+        "20260605182307_add_timeout_to_mcp_server_table",
+        "20260626120000_add_mcp_tool_search_enabled",
+        "20260629000000_add_max_concurrent_requests_to_mcp_server_table",
+        "20260710000000_add_dcr_bridge_to_mcp_server_table",
+        "20260713230852_add_key_type_to_litellm_verification_token",
+        "20260811172448_add_shadow_eval",
+        "20260813180408_add_shadow_eval_direction",
+        "20260814000000_add_proxy_worker_heartbeat",
+        "20260817143646_add_daily_guardrail_usage_units",
+        "20260818224500_add_shadow_eval_stopped_by",
+        "20260819000000_shadow_eval_max_budget",
+    }
+)
 
 
 def _blanked_block_comments(sql):
@@ -337,9 +333,7 @@ def _guarded_migrations(all_migrations):
     ones that predate these rules cannot be edited without breaking `migrate deploy`
     for existing installs; they are named once, and the rules bind everything after.
     """
-    return [
-        (name, sql) for name, sql in all_migrations if name not in _PRE_GUARD_MIGRATIONS
-    ]
+    return [(name, sql) for name, sql in all_migrations if name not in _PRE_GUARD_MIGRATIONS]
 
 
 class TestMigrationSQLIdempotency:
@@ -353,10 +347,7 @@ class TestMigrationSQLIdempotency:
     @pytest.fixture(scope="class")
     def all_migrations(self):
         migrations = _get_all_migrations()
-        assert len(migrations) > 0, (
-            f"No migrations found. "
-            f"Check that _MIGRATIONS_DIR ({_MIGRATIONS_DIR}) is correct."
-        )
+        assert len(migrations) > 0, f"No migrations found. Check that _MIGRATIONS_DIR ({_MIGRATIONS_DIR}) is correct."
         return migrations
 
     def test_create_table_uses_if_not_exists(self, all_migrations):
@@ -364,17 +355,11 @@ class TestMigrationSQLIdempotency:
         violations = []
         for migration_name, sql in _guarded_migrations(all_migrations):
             for line_num, line in _statements(sql):
-                if re.search(
-                    r"CREATE\s+TABLE\s+", line, re.IGNORECASE
-                ) and not re.search(
+                if re.search(r"CREATE\s+TABLE\s+", line, re.IGNORECASE) and not re.search(
                     r"CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS", line, re.IGNORECASE
                 ):
                     violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
-        assert (
-            not violations
-        ), "CREATE TABLE without IF NOT EXISTS found in migrations:\n" + "\n".join(
-            violations
-        )
+        assert not violations, "CREATE TABLE without IF NOT EXISTS found in migrations:\n" + "\n".join(violations)
 
     def test_add_column_uses_if_not_exists(self, all_migrations):
         """ADD COLUMN statements must use IF NOT EXISTS"""
@@ -385,27 +370,18 @@ class TestMigrationSQLIdempotency:
                     r"ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS", line, re.IGNORECASE
                 ):
                     violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
-        assert not violations, (
-            "ADD COLUMN without IF NOT EXISTS found in recent migrations:\n"
-            + "\n".join(violations)
-        )
+        assert not violations, "ADD COLUMN without IF NOT EXISTS found in recent migrations:\n" + "\n".join(violations)
 
     def test_drop_column_uses_if_exists(self, all_migrations):
         """DROP COLUMN statements must use IF EXISTS"""
         violations = []
         for migration_name, sql in _guarded_migrations(all_migrations):
             for line_num, line in _statements(sql):
-                if re.search(
-                    r"DROP\s+COLUMN\s+", line, re.IGNORECASE
-                ) and not re.search(
+                if re.search(r"DROP\s+COLUMN\s+", line, re.IGNORECASE) and not re.search(
                     r"DROP\s+COLUMN\s+IF\s+EXISTS", line, re.IGNORECASE
                 ):
                     violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
-        assert (
-            not violations
-        ), "DROP COLUMN without IF EXISTS found in recent migrations:\n" + "\n".join(
-            violations
-        )
+        assert not violations, "DROP COLUMN without IF EXISTS found in recent migrations:\n" + "\n".join(violations)
 
     _DROP_COLUMN_ALLOWLIST = {
         "20250918083359_drop_spec_version_column_from_mcp_table",
@@ -423,11 +399,7 @@ class TestMigrationSQLIdempotency:
             for line_num, line in _statements(sql):
                 if re.search(r"DROP\s+COLUMN", line, re.IGNORECASE):
                     violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
-        assert (
-            not violations
-        ), "DROP COLUMN found in migrations (destructive, not allowed):\n" + "\n".join(
-            violations
-        )
+        assert not violations, "DROP COLUMN found in migrations (destructive, not allowed):\n" + "\n".join(violations)
 
     def test_drop_index_uses_if_exists(self, all_migrations):
         """DROP INDEX statements must use IF EXISTS"""
@@ -438,28 +410,21 @@ class TestMigrationSQLIdempotency:
                     r"DROP\s+INDEX\s+IF\s+EXISTS", line, re.IGNORECASE
                 ):
                     violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
-        assert (
-            not violations
-        ), "DROP INDEX without IF EXISTS found in recent migrations:\n" + "\n".join(
-            violations
-        )
+        assert not violations, "DROP INDEX without IF EXISTS found in recent migrations:\n" + "\n".join(violations)
 
     def test_create_index_uses_if_not_exists(self, all_migrations):
         """CREATE INDEX statements must use IF NOT EXISTS"""
         violations = []
         for migration_name, sql in _guarded_migrations(all_migrations):
             for line_num, line in _statements(sql):
-                if re.search(
-                    r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+", line, re.IGNORECASE
-                ) and not re.search(
+                if re.search(r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+", line, re.IGNORECASE) and not re.search(
                     r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?IF\s+NOT\s+EXISTS",
                     line,
                     re.IGNORECASE,
                 ):
                     violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
-        assert not violations, (
-            "CREATE INDEX without IF NOT EXISTS found in recent migrations:\n"
-            + "\n".join(violations)
+        assert not violations, "CREATE INDEX without IF NOT EXISTS found in recent migrations:\n" + "\n".join(
+            violations
         )
 
     def test_rename_column_is_guarded(self, all_migrations):
@@ -472,14 +437,10 @@ class TestMigrationSQLIdempotency:
                     in_do_block = True
                 if re.search(r"END\s+\$\$", line, re.IGNORECASE):
                     in_do_block = False
-                if (
-                    re.search(r"RENAME\s+COLUMN\s+", line, re.IGNORECASE)
-                    and not in_do_block
-                ):
+                if re.search(r"RENAME\s+COLUMN\s+", line, re.IGNORECASE) and not in_do_block:
                     violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
-        assert not violations, (
-            "RENAME COLUMN without DO $$ IF EXISTS guard found in migrations:\n"
-            + "\n".join(violations)
+        assert not violations, "RENAME COLUMN without DO $$ IF EXISTS guard found in migrations:\n" + "\n".join(
+            violations
         )
 
     def test_add_constraint_is_guarded(self, all_migrations):
@@ -492,14 +453,10 @@ class TestMigrationSQLIdempotency:
                     in_do_block = True
                 if re.search(r"END\s+\$\$", line, re.IGNORECASE):
                     in_do_block = False
-                if (
-                    re.search(r"ADD\s+CONSTRAINT\s+", line, re.IGNORECASE)
-                    and not in_do_block
-                ):
+                if re.search(r"ADD\s+CONSTRAINT\s+", line, re.IGNORECASE) and not in_do_block:
                     violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
-        assert not violations, (
-            "ADD CONSTRAINT without DO $$ IF NOT EXISTS guard found in migrations:\n"
-            + "\n".join(violations)
+        assert not violations, "ADD CONSTRAINT without DO $$ IF NOT EXISTS guard found in migrations:\n" + "\n".join(
+            violations
         )
 
     def test_drop_constraint_is_guarded(self, all_migrations):
@@ -512,14 +469,10 @@ class TestMigrationSQLIdempotency:
                     in_do_block = True
                 if re.search(r"END\s+\$\$", line, re.IGNORECASE):
                     in_do_block = False
-                if (
-                    re.search(r"DROP\s+CONSTRAINT\s+", line, re.IGNORECASE)
-                    and not in_do_block
-                ):
+                if re.search(r"DROP\s+CONSTRAINT\s+", line, re.IGNORECASE) and not in_do_block:
                     violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
-        assert not violations, (
-            "DROP CONSTRAINT without DO $$ IF EXISTS guard found in migrations:\n"
-            + "\n".join(violations)
+        assert not violations, "DROP CONSTRAINT without DO $$ IF EXISTS guard found in migrations:\n" + "\n".join(
+            violations
         )
 
 
@@ -553,7 +506,7 @@ class TestMigrationGuardScope:
             "/*\n"
             "  Warnings:\n"
             "\n"
-            "  - You are about to CREATE TABLE \"Foo\" and ADD COLUMN \"bar\".\n"
+            '  - You are about to CREATE TABLE "Foo" and ADD COLUMN "bar".\n'
             "\n"
             "*/\n"
             'CREATE TABLE IF NOT EXISTS "Foo" (id TEXT);\n'
@@ -662,16 +615,14 @@ class _FakeCompleted:
 
 
 class TestResolveAllMigrationsLedger:
-    def _run(self, monkeypatch, tmp_path, partitioned, execute_fails):
+    def _run(self, monkeypatch, tmp_path, partitioned, execute_fails, drift_sql=_PARTITIONED_DRIFT_SQL):
         import subprocess as subprocess_module
 
         import litellm_proxy_extras.utils as utils_module
 
         monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:5432/db")
         monkeypatch.delenv("DIRECT_URL", raising=False)
-        monkeypatch.setattr(
-            ProxyExtrasDBManager, "spend_logs_is_partitioned", staticmethod(lambda: partitioned)
-        )
+        monkeypatch.setattr(ProxyExtrasDBManager, "spend_logs_is_partitioned", staticmethod(lambda: partitioned))
         monkeypatch.setattr(
             ProxyExtrasDBManager,
             "_get_migration_names",
@@ -682,7 +633,7 @@ class TestResolveAllMigrationsLedger:
         def fake_run(cmd, **kwargs):
             calls.append(cmd)
             if "diff" in cmd:
-                kwargs["stdout"].write(_PARTITIONED_DRIFT_SQL)
+                kwargs["stdout"].write(drift_sql)
                 return _FakeCompleted()
             if "execute" in cmd:
                 executed_sql = open(cmd[cmd.index("--file") + 1]).read()
@@ -723,6 +674,59 @@ class TestResolveAllMigrationsLedger:
         calls = self._run(monkeypatch, tmp_path, partitioned=False, execute_fails=False)
         assert self._executed_sql(calls) == _PARTITIONED_DRIFT_SQL
 
+    @pytest.mark.parametrize("partitioned", [False, True])
+    def test_hand_built_spend_logs_indexes_never_reach_the_database(self, monkeypatch, tmp_path, partitioned):
+        calls = self._run(
+            monkeypatch, tmp_path, partitioned=partitioned, execute_fails=False, drift_sql=_HAND_BUILT_INDEX_DRIFT_SQL
+        )
+        executed_sql = self._executed_sql(calls)
+        assert "LiteLLM_SpendLogs_litellm_call_id_idx" not in executed_sql
+        assert "LiteLLM_SpendLogs_api_key_startTime_idx" not in executed_sql
+        assert 'CREATE INDEX "LiteLLM_TeamTable_name_idx" ON "LiteLLM_TeamTable"("name");' in executed_sql
+
+    def test_drift_of_only_hand_built_indexes_executes_nothing(self, monkeypatch, tmp_path):
+        calls = self._run(
+            monkeypatch, tmp_path, partitioned=False, execute_fails=False, drift_sql=_ONLY_HAND_BUILT_INDEXES_DRIFT_SQL
+        )
+        assert not any(isinstance(c, list) and "execute" in c for c in calls)
+        assert len(self._resolved(calls)) == 1
+
+
+_ONLY_HAND_BUILT_INDEXES_DRIFT_SQL = """-- CreateIndex
+CREATE INDEX "LiteLLM_SpendLogs_litellm_call_id_idx" ON "LiteLLM_SpendLogs"("litellm_call_id");
+
+-- CreateIndex
+CREATE INDEX "LiteLLM_SpendLogs_api_key_startTime_idx" ON "LiteLLM_SpendLogs"("api_key", "startTime");
+"""
+
+_HAND_BUILT_INDEX_DRIFT_SQL = (
+    _ONLY_HAND_BUILT_INDEXES_DRIFT_SQL
+    + """
+-- CreateIndex
+CREATE INDEX "LiteLLM_TeamTable_name_idx" ON "LiteLLM_TeamTable"("name");
+"""
+)
+
+
+class TestHandBuiltSpendLogsIndexDriftFilter:
+    @pytest.mark.parametrize(
+        "statement",
+        [
+            'CREATE INDEX "LiteLLM_SpendLogs_litellm_call_id_idx" ON "LiteLLM_SpendLogs"("litellm_call_id")',
+            'CREATE INDEX CONCURRENTLY IF NOT EXISTS "LiteLLM_SpendLogs_litellm_call_id_idx" ON "LiteLLM_SpendLogs"("litellm_call_id")',
+            'create index if not exists "LiteLLM_SpendLogs_api_key_startTime_idx" on "LiteLLM_SpendLogs"("api_key", "startTime")',
+        ],
+    )
+    def test_hand_built_index_creation_is_removed(self, statement):
+        assert filter_hand_built_spend_logs_index_diff(f"-- CreateIndex\n{statement};\n") == ""
+
+    def test_other_spend_logs_indexes_and_statements_are_kept_verbatim(self):
+        kept = (
+            'CREATE INDEX "LiteLLM_SpendLogs_session_id_idx" ON "LiteLLM_SpendLogs"("session_id");\n'
+            'ALTER TABLE "LiteLLM_BudgetTable" ADD COLUMN     "updated_by" TEXT;\n'
+        )
+        assert filter_hand_built_spend_logs_index_diff(kept) == kept
+
 
 class TestPartitionedSpendLogsPushGuard:
     def _forbid_subprocess(self, monkeypatch):
@@ -734,18 +738,14 @@ class TestPartitionedSpendLogsPushGuard:
         monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", fail_run)
 
     def test_v1_db_push_fails_fast_with_guidance(self, monkeypatch):
-        monkeypatch.setattr(
-            ProxyExtrasDBManager, "spend_logs_is_partitioned", staticmethod(lambda: True)
-        )
+        monkeypatch.setattr(ProxyExtrasDBManager, "spend_logs_is_partitioned", staticmethod(lambda: True))
         self._forbid_subprocess(monkeypatch)
         with pytest.raises(RuntimeError) as err:
             ProxyExtrasDBManager._run_migrations(use_migrate=False, use_v2_resolver=False)
         assert str(err.value) == PARTITIONED_SPEND_LOGS_PUSH_ERROR
 
     def test_v2_db_push_fails_fast_with_guidance(self, monkeypatch):
-        monkeypatch.setattr(
-            ProxyExtrasDBManager, "spend_logs_is_partitioned", staticmethod(lambda: True)
-        )
+        monkeypatch.setattr(ProxyExtrasDBManager, "spend_logs_is_partitioned", staticmethod(lambda: True))
         self._forbid_subprocess(monkeypatch)
         with pytest.raises(RuntimeError) as err:
             ProxyExtrasDBManager._setup_database_v2(use_migrate=False)
@@ -837,9 +837,7 @@ class TestSpendLogsPartitionDetectionSchemaScope:
         return executed[0]
 
     def test_lookup_is_scoped_to_the_schema_url_param(self, monkeypatch):
-        query, params = self._detect(
-            monkeypatch, "postgresql://u:p@localhost:5432/db?schema=tenant_a"
-        )
+        query, params = self._detect(monkeypatch, "postgresql://u:p@localhost:5432/db?schema=tenant_a")
         assert "pg_namespace" in query
         assert "n.nspname = %s" in query
         assert params == ("tenant_a",)
@@ -871,9 +869,7 @@ class TestSpendLogsPartitionDetectionMissingPsycopg:
         monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:5432/db")
         with caplog.at_level("WARNING", logger="litellm_proxy_extras"):
             ProxyExtrasDBManager.spend_logs_is_partitioned()
-        assert any(
-            "psycopg is not installed" in record.message for record in caplog.records
-        )
+        assert any("psycopg is not installed" in record.message for record in caplog.records)
 
 
 _ATTEMPT_BUDGET = 4
@@ -1396,8 +1392,7 @@ class TestMigrationLockTimeoutRecovery:
 
 class TestLogMigrationLockHolders:
     _MIGRATION_SQL = (
-        "-- AlterTable\n"
-        'ALTER TABLE "LiteLLM_SpendLogs" ADD COLUMN IF NOT EXISTS "created_at" TIMESTAMP(3);\n'
+        '-- AlterTable\nALTER TABLE "LiteLLM_SpendLogs" ADD COLUMN IF NOT EXISTS "created_at" TIMESTAMP(3);\n'
     )
 
     def _migration_file(self, tmp_path: Path) -> None:
@@ -1542,11 +1537,7 @@ class TestJWTKeyMappingCascade:
         """schema.prisma must declare onDelete: Cascade on the mapping relation
         so the generated client and DB agree."""
         schema_paths = glob.glob(
-            os.path.abspath(
-                os.path.join(
-                    os.path.dirname(__file__), "../../../**/schema.prisma"
-                )
-            ),
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../**/schema.prisma")),
             recursive=True,
         )
         declaring = tuple(
@@ -1566,10 +1557,8 @@ class TestJWTKeyMappingCascade:
                 "(issue #33702)"
             )
             assert "onDelete: Cascade" in match.group(1), (
-                f"{path} must declare onDelete: Cascade on the JWT key mapping "
-                "relation (issue #33702)"
+                f"{path} must declare onDelete: Cascade on the JWT key mapping relation (issue #33702)"
             )
-
 
 
 class TestStripPrismaQueryParams:
@@ -1738,7 +1727,9 @@ class TestBuildRequestLogIndexes:
 
         return record
 
-    def test_the_build_gets_the_direct_url_without_prisma_params_and_the_prisma_schema(self, monkeypatch, builds, build):
+    def test_the_build_gets_the_direct_url_without_prisma_params_and_the_prisma_schema(
+        self, monkeypatch, builds, build
+    ):
         monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@pooler:6543/db?schema=tenant&pgbouncer=true")
         monkeypatch.setenv("DIRECT_URL", "postgresql://u:p@primary:5432/db?connection_limit=1")
 
@@ -1951,12 +1942,8 @@ class TestV1MigrationFailuresLogAtError:
         else:
             monkeypatch.setenv("DATABASE_URL", database_url)
         monkeypatch.setenv("LITELLM_MIGRATION_DIR", str(migration_dir))
-        monkeypatch.setattr(
-            utils_module.prisma_toolchain.subprocess, "Popen", _FakePrismaPopen
-        )
-        monkeypatch.setattr(
-            utils_module.prisma_toolchain.os, "killpg", lambda pid, sig: killed_pids.append(pid)
-        )
+        monkeypatch.setattr(utils_module.prisma_toolchain.subprocess, "Popen", _FakePrismaPopen)
+        monkeypatch.setattr(utils_module.prisma_toolchain.os, "killpg", lambda pid, sig: killed_pids.append(pid))
         monkeypatch.setattr(utils_module.time, "sleep", lambda seconds: None)
 
         succeeded: Final = ProxyExtrasDBManager._run_migrations(use_migrate=True, use_v2_resolver=False)
@@ -1979,9 +1966,7 @@ class TestV1MigrationFailuresLogAtError:
     ) -> None:
         stderr: Final = "Error: P1001: Can't reach database server at db:5432"
         with caplog.at_level(logging.ERROR, logger="litellm_proxy_extras"):
-            succeeded, calls, _ = self._run_v1_migrations(
-                monkeypatch, tmp_path, deploy_stderr=stderr
-            )
+            succeeded, calls, _ = self._run_v1_migrations(monkeypatch, tmp_path, deploy_stderr=stderr)
 
         assert succeeded is False
         assert self._deploy_call_count(calls) == 4
@@ -1998,10 +1983,7 @@ class TestV1MigrationFailuresLogAtError:
         assert succeeded is False
         assert self._deploy_call_count(calls) == 4
         messages: Final = self._error_messages(caplog)
-        assert any(
-            "20260921190000_agent_identity" in message and "is duplicated" in message
-            for message in messages
-        )
+        assert any("20260921190000_agent_identity" in message and "is duplicated" in message for message in messages)
         assert any(
             "The process failed to execute" in message and "Retrying... (3 attempts left)" in message
             for message in messages
@@ -2046,14 +2028,10 @@ class TestV1MigrationFailuresLogAtError:
             def communicate(self, timeout: Optional[float] = None) -> tuple[str, str]:
                 return "", "Error: P3018 unclassified"
 
-        monkeypatch.setattr(
-            utils_module.prisma_toolchain.subprocess, "Popen", _FakePrismaPopen
-        )
+        monkeypatch.setattr(utils_module.prisma_toolchain.subprocess, "Popen", _FakePrismaPopen)
 
         try:
-            succeeded: Final = ProxyExtrasDBManager._run_migrations(
-                use_migrate=True, use_v2_resolver=False
-            )
+            succeeded: Final = ProxyExtrasDBManager._run_migrations(use_migrate=True, use_v2_resolver=False)
         except TypeError as error:
             pytest.fail(
                 f"_run_migrations raised TypeError after {len(calls)} Popen calls: {error}",
@@ -2069,9 +2047,7 @@ class TestV1MigrationFailuresLogAtError:
         from litellm_proxy_extras.prisma_toolchain import PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR
 
         with caplog.at_level(logging.ERROR, logger="litellm_proxy_extras"):
-            succeeded, calls, killed_pids = self._run_v1_migrations(
-                monkeypatch, tmp_path, deploy_timeout=True
-            )
+            succeeded, calls, killed_pids = self._run_v1_migrations(monkeypatch, tmp_path, deploy_timeout=True)
 
         assert succeeded is False
         assert self._deploy_call_count(calls) == 4

@@ -1312,7 +1312,6 @@ def test_anthropic_structured_output_beta_header():
     print(f"raw_request_headers: {response['raw_request_headers']}")
     assert "structured-outputs-2025-11-13" in response["raw_request_headers"]["anthropic-beta"]
 
-
 @pytest.mark.parametrize(
     "model_name",
     [

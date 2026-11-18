@@ -6,6 +6,7 @@ and version parameter injection.
 """
 
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest

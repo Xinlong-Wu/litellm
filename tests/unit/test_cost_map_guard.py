@@ -1,9 +1,9 @@
+from collections.abc import Mapping
 import importlib.util
 import json
 import os
 import subprocess
 import sys
-from collections.abc import Mapping
 from pathlib import Path
 from types import ModuleType
 from typing import Final
@@ -192,6 +192,13 @@ def test_bot_may_only_touch_the_cost_map_files() -> None:
         "bot PRs may only change the cost map files, not litellm/utils.py",
         "bot PRs may only change the cost map files, not .github/workflows/cost-map-guard.yml",
     )
+
+
+def test_bot_may_update_cost_map_and_legacy_schema() -> None:
+    head: Final = _snapshot({**BASE_MAP, "openrouter/c": _entry()})
+    changed: Final = (*guard.GUARDED_PATHS, guard.LEGACY_SCHEMA_PATH)
+
+    assert _failures(head, changed_files=changed) == ()
 
 
 def test_bot_may_not_remove_models() -> None:

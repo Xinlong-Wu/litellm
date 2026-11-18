@@ -13823,6 +13823,8 @@ async def test_identity_bound_authorize_unrelated_bearer_uses_browser_session(
 ) -> None:
     from urllib.parse import parse_qs, urlparse
 
+    import jwt
+
     from litellm.models.user import LiteLLM_UserTable
     from litellm.proxy import proxy_server
     from litellm.proxy._types import MCPTransport

@@ -6,9 +6,10 @@ from collections.abc import Iterator, Mapping
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, Literal, cast
 
+
 import httpx
-import pytest
 import respx
+import pytest
 from openai.types.completion_usage import CompletionUsage
 from pydantic import BaseModel
 

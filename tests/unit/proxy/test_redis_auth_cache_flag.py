@@ -86,6 +86,10 @@ def _patched_init_cache(
 
     enable_redis_auth_cache = litellm_settings.get("enable_redis_auth_cache", False)
 
+    original_litellm_cache = litellm.cache
+    original_redis_usage_cache = ps.redis_usage_cache
+    original_config_cache_redis = ps.litellm_config_cache.redis_cache
+
     with (
         patch.object(ps, "user_api_key_cache", fresh_user_cache),
         patch.object(ps, "spend_counter_cache", DualCache()),

@@ -19,6 +19,7 @@ from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
     encrypt_callback_vars,
     get_logging_caching_headers,
+    get_model_group_from_litellm_kwargs,
     get_remaining_tokens_and_requests_from_request_data,
     initialize_callbacks_on_proxy,
     normalize_callback_names,

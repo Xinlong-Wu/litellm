@@ -180,7 +180,7 @@ def _bot_failures(base: Snapshot, head_map: CostMap, changed_files: Sequence[str
         *(
             f"bot PRs may only change the cost map files, not {path}"
             for path in changed_files
-            if path not in GUARDED_PATHS
+            if path not in GUARDED_PATHS and path != LEGACY_SCHEMA_PATH
         ),
         *(f"bot PRs may not remove models: {key}" for key in base_map if key not in head_map),
         *(f"bot PRs may not remove fields: {ref}" for ref in removed_fields),

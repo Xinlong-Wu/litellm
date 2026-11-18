@@ -168,6 +168,42 @@ def decode_video_id_with_provider(encoded_video_id: str) -> DecodedVideoId:
     )
     return with_deployment if requested_model is None else {**with_deployment, "requested_model": requested_model}
 
+    if ";" not in decoded_id:
+        return DecodedVideoId(
+            custom_llm_provider=None,
+            model_id=None,
+            video_id=encoded_video_id,
+        )
+
+    parts: Final = decoded_id.split(";")
+
+    custom_llm_provider = None
+    model_id = None
+    decoded_video_id = encoded_video_id
+
+    if len(parts) >= 3:
+        custom_llm_provider_part: Final = parts[0]
+        model_id_part: Final = parts[1]
+        video_id_part: Final = parts[2]
+
+        custom_llm_provider = custom_llm_provider_part.replace("litellm:custom_llm_provider:", "")
+        model_id = model_id_part.replace("model_id:", "")
+        decoded_video_id = video_id_part.replace("video_id:", "")
+
+    served_model: Final = _trailing_part(parts, VIDEO_ID_SERVED_MODEL_PREFIX)
+    deployment_id: Final = _trailing_part(parts, VIDEO_ID_DEPLOYMENT_PREFIX)
+    requested_model: Final = _trailing_part(parts, VIDEO_ID_REQUESTED_MODEL_PREFIX)
+    decoded_parts: Final = DecodedVideoId(
+        custom_llm_provider=custom_llm_provider, model_id=model_id, video_id=decoded_video_id
+    )
+    with_served: Final[DecodedVideoId] = (
+        decoded_parts if served_model is None else {**decoded_parts, "served_model": served_model}
+    )
+    with_deployment: Final[DecodedVideoId] = (
+        with_served if deployment_id is None else {**with_served, "deployment_id": deployment_id}
+    )
+    return with_deployment if requested_model is None else {**with_deployment, "requested_model": requested_model}
+
 
 def extract_original_video_id(encoded_video_id: str) -> str:
     """Extract original video ID without encoding."""

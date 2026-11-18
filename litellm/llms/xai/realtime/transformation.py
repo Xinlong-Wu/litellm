@@ -79,12 +79,12 @@ class XAIRealtimeNormalizer:
         return event
 
     def gate_turn_detection(self, _turn_detection: object, /) -> Mapping[str, object]:
-        """xAI auto-answers under ``server_vad`` even with ``create_response`` off, so the gate is always untyped."""
+        """Disable turn detection because xAI auto-answers under ``server_vad`` regardless of this gate."""
         return {"create_response": False}
 
     @property
     def deletes_conversation_items(self) -> bool:
-        """xAI answers ``conversation.item.delete`` with ``Item not found`` until it commits the audio item.
+        """Return whether xAI supports deleting committed conversation items.
 
         The guardrail blocks on an interim transcript, before that commit.
         """

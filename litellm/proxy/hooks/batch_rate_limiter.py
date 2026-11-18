@@ -18,7 +18,7 @@ Quick summary:
 """
 
 import json
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, TypeAlias
@@ -1062,7 +1062,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
     async def _enforce_batch_file_model_access(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        models: Iterable[str] | None = None,
+        models: Collection[str] | None = None,
         target_model_names: list[str] | None = None,
     ) -> None:
         """Reject the batch if the caller is not authorized for the upload target.
@@ -1084,10 +1084,8 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         )
         from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_logging_obj, user_api_key_cache
 
-        if target_model_names:
-            models = target_model_names
-
-        if not models:
+        models_to_check = target_model_names if target_model_names else models
+        if not models_to_check:
             return
 
         team_object = None
@@ -1115,7 +1113,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 ) from e
 
         llm_model_list: Final = llm_router.registry().all() if llm_router is not None else None
-        for model in models:
+        for model in models_to_check:
             model_to_check = model
             try:
                 if team_object is not None:
