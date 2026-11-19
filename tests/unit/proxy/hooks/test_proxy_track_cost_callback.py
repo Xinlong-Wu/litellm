@@ -1978,7 +1978,7 @@ async def test_callback_handles_every_status_the_interactions_api_can_return():
 
         (deferred if reservation["finalized"] is False else released).add(status)
 
-    assert deferred == {"in_progress"}
+    assert deferred == {"in_progress", "queued"}
     assert released == {
         "completed",
         "requires_action",

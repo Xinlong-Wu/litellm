@@ -74,7 +74,10 @@ _TERMINAL_STATUSES: Final = frozenset(
     {"completed", "failed", "cancelled", "incomplete", "budget_exceeded", "requires_action", "requires_continuation"}
 )
 
-_POLLABLE_STATUSES: Final = frozenset({"in_progress"})
+# ``queued`` is an accepted background-create state. Like ``in_progress``, it
+# has no final usage yet and must retain its reservation until polling settles
+# it at a terminal state.
+_POLLABLE_STATUSES: Final = frozenset({"in_progress", "queued"})
 
 _STATUSES_THAT_PRODUCED_OUTPUT: Final = frozenset({"completed", "requires_action", "requires_continuation"})
 

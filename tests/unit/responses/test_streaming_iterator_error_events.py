@@ -507,7 +507,7 @@ def test_response_failed_keeps_upstream_code_and_uses_content_policy_fallback_fo
     expected = litellm.ContentPolicyViolationError if code == "cyber_policy" else litellm.InternalServerError
     assert isinstance(mapped, expected)
     assert mapped.code == code
-    assert mapped.body == {"message": upstream_message, "type": None, "code": code}
+    assert mapped.body == {"message": upstream_message, "type": None, "code": code, "param": None}
 
 
 def test_maybe_raise_for_error_event_null_error_obj():

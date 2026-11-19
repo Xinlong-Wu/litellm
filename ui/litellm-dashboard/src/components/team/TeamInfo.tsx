@@ -393,6 +393,7 @@ const buildTeamUpdateFieldsSchema = (t: TFunction) =>
     default_team_member_models: z.array(z.string()).optional(),
     team_member_budget: numericInputSchema,
     team_member_budget_duration: z.string().nullish(),
+    team_member_model_group_max_budget: modelGroupBudgetSchema.optional(),
     team_member_key_duration: z.string().optional(),
     team_member_tpm_limit: numericInputSchema,
     team_member_rpm_limit: numericInputSchema,
