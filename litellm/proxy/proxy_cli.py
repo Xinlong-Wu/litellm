@@ -420,11 +420,7 @@ class ProxyInitializationHelpers:
         import uvicorn
 
         import litellm
-        from litellm._logging import (
-            _get_uvicorn_log_config,
-            resolve_log_level,
-            resolve_uvicorn_log_file,
-        )
+        from litellm._logging import _get_uvicorn_json_log_config, resolve_log_level
         from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 
         uvicorn_args: Final = {
@@ -440,10 +436,9 @@ class ProxyInitializationHelpers:
         if log_config is not None:
             print_startup_message(f"Using log_config: {log_config}")
             uvicorn_args["log_config"] = log_config
-        elif litellm.json_logs or resolve_uvicorn_log_file() is not None:
-            # Apply a uvicorn log_config when JSON logs are on, or when a log
-            # directory is configured (so uvicorn access/error logs land on disk).
-            uvicorn_args["log_config"] = _get_uvicorn_log_config(use_json=litellm.json_logs)
+        elif litellm.json_logs:
+            # Use JSON log config for uvicorn to ensure all logs (including exceptions) are JSON.
+            uvicorn_args["log_config"] = _get_uvicorn_json_log_config()
         elif litellm_log := os.environ.get("LITELLM_LOG"):
             uvicorn_args["log_level"] = resolve_log_level(litellm_log)
         if keepalive_timeout is not None:

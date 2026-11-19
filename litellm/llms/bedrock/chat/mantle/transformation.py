@@ -44,7 +44,25 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         json_schema: Mapping[str, object] | None,
         request_params: Mapping[str, object],
     ) -> bool:
-        return super().uses_native_structured_output_for_schema(model, json_schema, {})
+        """Keep legacy native-output models on Mantle's native path.
+
+        The v1.110 Bedrock refactor makes the common Invoke predicate look at
+        the Bedrock-specific capability flags. Mantle also supports the older
+        ``supports_native_structured_output`` model-map flag, which is the
+        native-on-every-request contract for this endpoint.
+        """
+        return self.uses_native_structured_output(model) or super().uses_native_structured_output_for_schema(
+            model, json_schema, {}
+        )
+
+    def native_output_format_schema(self, json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
+        """Apply Anthropic's supported-field filter without rejecting open objects.
+
+        Mantle's legacy native-output models accept the same open-object
+        schemas as Anthropic's output-format API. The shared v1.110 Bedrock
+        helper is stricter because it serves the Bedrock opt-in path.
+        """
+        return self.filter_anthropic_output_schema(dict(self._defs_unpacked(json_schema)))
 
     def get_complete_url(
         self,
