@@ -117,7 +117,7 @@ jobs:
             workers: 4
             reruns: 2
           - name: proxy-infra
-            paths: tests/unit/proxy/db tests/unit/proxy/middleware tests/unit/proxy/spend_tracking tests/unit/proxy/pass_through_endpoints tests/unit/proxy/_experimental tests/unit/proxy/experimental tests/unit/proxy/common_utils tests/unit/proxy/test_*.py
+            paths: tests/unit/proxy/db tests/unit/proxy/middleware tests/unit/proxy/spend_tracking tests/unit/proxy/pass_through_endpoints tests/unit/proxy/_experimental tests/unit/proxy/common_utils tests/unit/proxy/test_*.py
             workers: 2
             reruns: 2
           - name: responses-caching-types

@@ -6,12 +6,14 @@ from dataclasses import dataclass
 from itertools import accumulate
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias
 
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
+    BAGGAGE_MAPPED_TAGS_METADATA_KEY,
     CLIENT_OUTPUT_CEILING_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     MAX_GUARDRAIL_SCAN_METADATA_HEADER_LENGTH,
@@ -40,6 +42,7 @@ from litellm.types.utils import (
 )
 
 _CALLBACK_VAR_MASKER: Final = SensitiveDataMasker()
+_LOADED_CALLBACK: Final = TypeAdapter(object)
 # Compound names that are credential-bearing but don't contain any of the
 # default sensitive segments (so SensitiveDataMasker won't flag them).
 _EXTRA_SENSITIVE_CALLBACK_KEYS: Final = {"gcs_path_service_account"}
@@ -393,9 +396,11 @@ def initialize_callbacks_on_proxy(
                 imported_list.append(
                     _loaded_callback_or_raise(
                         entry=callback,
-                        loaded=get_instance_fn(
-                            value=callback,
-                            config_file_path=config_file_path,
+                        loaded=_LOADED_CALLBACK.validate_python(
+                            get_instance_fn(
+                                value=callback,
+                                config_file_path=config_file_path,
+                            )
                         ),
                     )
                 )
@@ -412,9 +417,11 @@ def initialize_callbacks_on_proxy(
         litellm.callbacks = [
             _loaded_callback_or_raise(
                 entry=value,
-                loaded=get_instance_fn(
-                    value=value,
-                    config_file_path=config_file_path,
+                loaded=_LOADED_CALLBACK.validate_python(
+                    get_instance_fn(
+                        value=value,
+                        config_file_path=config_file_path,
+                    )
                 ),
             )
         ]
@@ -433,13 +440,9 @@ def get_model_group_from_litellm_kwargs(kwargs: dict) -> str | None:
 
 
 def get_model_group_from_request_data(data: dict) -> str | None:
-    for metadata_key in ("litellm_metadata", "metadata"):
-        metadata = data.get(metadata_key)
-        if isinstance(metadata, dict):
-            model_group = metadata.get("model_group")
-            if isinstance(model_group, str):
-                return model_group
-    return None
+    _metadata: Final = data.get("metadata", None) or {}
+    _model_group: Final = _metadata.get("model_group", None)
+    return _model_group if isinstance(_model_group, str) else None
 
 
 def get_remaining_tokens_and_requests_from_request_data(data: dict) -> dict[str, str]:
@@ -570,6 +573,7 @@ LITELLM_PROXY_INTERNAL_METADATA_KEYS: Final = frozenset(
         PRE_CALL_EXECUTED_GUARDRAILS_KEY,
         SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
         CONSUMED_REQUEST_TAGS_METADATA_KEY,
+        BAGGAGE_MAPPED_TAGS_METADATA_KEY,
         CLIENT_OUTPUT_CEILING_METADATA_KEY,
         ROUTING_REQUEST_TAGS_METADATA_KEY,
         "disable_global_guardrails",
@@ -741,7 +745,7 @@ def strip_callback_config(metadata: dict[str, object] | None) -> dict[str, objec
     return {k: v for k, v in metadata.items() if k not in _CALLBACK_CONFIG_SLOTS}
 
 
-def encrypt_callback_vars(metadata: object) -> Any:
+def encrypt_callback_vars(metadata: object) -> object:
     """Return a deep copy of metadata with callback_vars values encrypted at rest.
 
     Idempotent: a value that already decrypts cleanly is left unchanged so

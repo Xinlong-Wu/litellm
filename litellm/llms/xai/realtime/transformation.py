@@ -16,6 +16,7 @@ construction time (see ``handler.py``) so all normalization is isolated here
 and ``RealTimeStreaming`` stays provider-agnostic.
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 
@@ -76,6 +77,18 @@ class XAIRealtimeNormalizer:
         event = self._inject_missing_indices(event, event_type)
         event = self._normalize_response_usage_event(event, event_type)
         return event
+
+    def gate_turn_detection(self, _turn_detection: object, /) -> Mapping[str, object]:
+        """Disable turn detection because xAI auto-answers under ``server_vad`` regardless of this gate."""
+        return {"create_response": False}
+
+    @property
+    def deletes_conversation_items(self) -> bool:
+        """Return whether xAI supports deleting committed conversation items.
+
+        The guardrail blocks on an interim transcript, before that commit.
+        """
+        return False
 
     def patch_outgoing_session(self, session: dict) -> dict:
         """Patch a client ``session.update`` payload before forwarding to xAI.

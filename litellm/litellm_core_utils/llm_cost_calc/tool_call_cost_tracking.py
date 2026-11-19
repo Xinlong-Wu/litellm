@@ -160,9 +160,9 @@ class StandardBuiltInToolCostTracking:
             except Exception:  # noqa: BLE001  # unknown prefixes retain the caller's provider behavior
                 prefixed_provider = None
             if prefixed_provider is not None and prefixed_provider != custom_llm_provider:
-                by_prefix: Final = StandardBuiltInToolCostTracking._safe_get_model_info(model=model)
-                if by_prefix is not None:
-                    return by_prefix, by_prefix["litellm_provider"]
+                prefixed_info: Final = StandardBuiltInToolCostTracking._safe_get_model_info(model=model)
+                if prefixed_info is not None:
+                    return prefixed_info, prefixed_info["litellm_provider"]
 
         direct: Final = StandardBuiltInToolCostTracking._safe_get_model_info(
             model=model, custom_llm_provider=custom_llm_provider
@@ -222,11 +222,14 @@ class StandardBuiltInToolCostTracking:
             usage=usage, response_object=response_object
         )
 
+        response_model: Final = _output_item_field(response_object, "model")
         if model_info is not None and resolved_usage is not None and resolved_provider is not None:
             result: Final = get_cost_for_web_search_request(
                 custom_llm_provider=resolved_provider,
                 usage=resolved_usage,
                 model_info=model_info,
+                response_model=response_model if isinstance(response_model, str) else None,
+                lookup_model_info=StandardBuiltInToolCostTracking._safe_get_model_info,
             )
             if result is not None:
                 return result
@@ -235,7 +238,20 @@ class StandardBuiltInToolCostTracking:
             web_search_options=standard_built_in_tools_params.get("web_search_options", None),
             model_info=model_info,
         )
-        return per_call_cost * StandardBuiltInToolCostTracking._count_web_search_calls(response_object)
+        return per_call_cost * StandardBuiltInToolCostTracking._billable_web_search_calls(
+            resolved_usage, response_object
+        )
+
+    @staticmethod
+    def _billable_web_search_calls(usage: Usage | None, response_object: object) -> int:
+        """
+        Providers without their own calculator but whose usage carries server_tool_use.web_search_requests
+        (OpenAI-compatible providers that report a per-tool count) are billed that many calls on the per-call path.
+        """
+        reported: Final = None if usage is None else get_web_search_requests_from_usage(usage)
+        if isinstance(reported, int) and not isinstance(reported, bool) and reported > 0:
+            return reported
+        return StandardBuiltInToolCostTracking._count_web_search_calls(response_object)
 
     @staticmethod
     def _count_web_search_calls(response_object: object) -> int:
@@ -464,7 +480,7 @@ class StandardBuiltInToolCostTracking:
     def _get_code_interpreter_cost(
         model_info: ModelInfo | None,
         custom_llm_provider: str | None,
-        standard_built_in_tools_params: StandardBuiltInToolsParams,
+        standard_built_in_tools_params: Mapping[str, object],
     ) -> float:
         """Calculate code interpreter cost."""
         code_interpreter_sessions: Final = standard_built_in_tools_params.get("code_interpreter_sessions", None)

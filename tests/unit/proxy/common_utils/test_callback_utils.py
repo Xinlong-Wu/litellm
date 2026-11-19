@@ -50,39 +50,17 @@ def test_get_remaining_tokens_and_requests_from_request_data():
     }
 
 
-def test_get_remaining_tokens_and_requests_reads_litellm_metadata_first():
-    model_group = "responses/restricted-model"
-    provider_metadata = {"customer_id": "cust-123"}
-    request_data = {
-        "metadata": provider_metadata,
-        "litellm_metadata": {
-            "model_group": model_group,
-            f"litellm-key-remaining-requests-{model_group}": 9,
-            f"litellm-key-remaining-tokens-{model_group}": 95,
-        },
+@pytest.mark.parametrize("client_model_group", [7, ["embed-only"], {"name": "embed-only"}])
+def test_remaining_limit_headers_ignore_a_model_group_that_is_not_a_string(client_model_group: object):
+    casedata: Final = {
+        "metadata": {
+            "model_group": client_model_group,
+            f"litellm-key-remaining-requests-{client_model_group}": 100,
+            f"litellm-key-remaining-tokens-{client_model_group}": 200,
+        }
     }
 
-    headers = get_remaining_tokens_and_requests_from_request_data(request_data)
-
-    assert headers == {
-        "x-litellm-key-remaining-requests-responses-restricted-model": 9,
-        "x-litellm-key-remaining-tokens-responses-restricted-model": 95,
-    }
-    assert request_data["metadata"] == provider_metadata
-
-
-def test_get_model_group_from_litellm_kwargs_prefers_internal_bucket():
-    assert (
-        get_model_group_from_litellm_kwargs(
-            {
-                "litellm_params": {
-                    "metadata": {"provider_field": "value"},
-                    "litellm_metadata": {"model_group": "restricted-model"},
-                }
-            }
-        )
-        == "restricted-model"
-    )
+    assert get_remaining_tokens_and_requests_from_request_data(casedata) == {}
 
 
 @patch(

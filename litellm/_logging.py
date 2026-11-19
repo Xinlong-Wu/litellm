@@ -1,20 +1,21 @@
 import ast
 import contextvars
 import functools
+import inspect
 import itertools
 import logging
 import os
 import re
 import sys
-import time
 from collections.abc import Iterator, Mapping
 from datetime import datetime
 from logging import Formatter
-from logging.handlers import TimedRotatingFileHandler
-from typing import Any, Final, TextIO
+from types import FrameType
+from typing import Final, TextIO
 from urllib.parse import unquote
 
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import (
@@ -27,47 +28,16 @@ from litellm.litellm_core_utils.env_utils import get_env_int
 from litellm.litellm_core_utils.safe_json_dumps import UNSERIALIZABLE_OBJECT, safe_dumps, safe_json_structure
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.secret_redaction import (
+    REDACTED,
     python_redact_string,
     python_redact_structured_value,
     redact_internal_details,
+    redact_structured_value,
 )
 from litellm.litellm_core_utils.secret_redaction import (
     redact_string as redact_secret_string,
 )
 from litellm.rust_bridge import diagnostics
-
-# OS-dispatched import for the advisory file lock used to serialize daily log
-# rotation across processes. Each platform imports only the stdlib module it is
-# guaranteed to have, so importing this module is safe everywhere.
-if sys.platform == "win32":  # pragma: no cover - Windows-only
-    import msvcrt
-else:
-    import fcntl
-
-
-def _try_lock_nb(fd: int) -> bool:
-    """Non-blocking exclusive advisory lock. True if acquired, False if contended."""
-    try:
-        if sys.platform == "win32":
-            os.lseek(fd, 0, os.SEEK_SET)
-            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
-        else:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        return True
-    except OSError:  # BlockingIOError (contended) is an OSError subclass
-        return False
-
-
-def _unlock(fd: int) -> None:
-    try:
-        if sys.platform == "win32":
-            os.lseek(fd, 0, os.SEEK_SET)
-            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
-        else:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-    except OSError:
-        pass
-
 
 set_verbose = False
 
@@ -170,6 +140,32 @@ def redact_internal_details_from_client_message(value: str) -> str:
     if not _ENABLE_SECRET_REDACTION:
         return value
     return redact_internal_details(value)
+
+
+_CLIENT_FIELDS: Final = TypeAdapter(dict[str, object])
+_CLIENT_ITEMS: Final = TypeAdapter(list[object])
+
+
+def _redacted_client_field(key: str | None, value: object) -> object:
+    if isinstance(value, str):
+        return redact_internal_details(redact_structured_value(key, value))
+    if isinstance(value, dict):
+        return {
+            child_key: _redacted_client_field(child_key, child)
+            for child_key, child in _CLIENT_FIELDS.validate_python(value).items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_redacted_client_field(key, child) for child in _CLIENT_ITEMS.validate_python(value)]
+    if not isinstance(value, (int, float)):
+        return value
+    text: Final = str(value)
+    return value if redact_structured_value(key, text) == text else REDACTED
+
+
+def redact_internal_details_from_client_fields(fields: Mapping[str, object]) -> object:
+    if not _ENABLE_SECRET_REDACTION:
+        return fields
+    return _redacted_client_field(None, dict(fields))
 
 
 def _substituted_color_message(record: logging.LogRecord) -> str | None:
@@ -632,6 +628,7 @@ _LOG_FORMAT_PREFIX: Final = "%(asctime)s - %(name)s:%(levelname)s"
 _LOG_FORMAT_SUFFIX: Final = ": %(filename)s:%(lineno)s - %(message)s"
 _PLAIN_LOG_FORMAT: Final = _LOG_FORMAT_PREFIX + _LOG_FORMAT_SUFFIX
 _COLOR_LOG_FORMAT: Final = f"\033[92m{_LOG_FORMAT_PREFIX}\033[0m{_LOG_FORMAT_SUFFIX}"
+_ANSI_ESCAPE: Final = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def _stream_is_tty(stream: TextIO | None) -> bool:
@@ -646,15 +643,28 @@ def _stream_is_tty(stream: TextIO | None) -> bool:
         return False
 
 
-def _plain_log_format(stdout: TextIO | None, stderr: TextIO | None) -> str:
-    """The plain-text log format, colorized only when both streams are an interactive terminal.
+def _color_enabled(stream: TextIO | None) -> bool:
+    """True when ANSI colors written to the stream reach an interactive terminal.
 
     Honors the NO_COLOR convention from no-color.org: color is disabled when
     NO_COLOR is present with a non-empty value.
     """
-    if os.environ.get("NO_COLOR"):
-        return _PLAIN_LOG_FORMAT
-    return _COLOR_LOG_FORMAT if _stream_is_tty(stdout) and _stream_is_tty(stderr) else _PLAIN_LOG_FORMAT
+    return not os.environ.get("NO_COLOR") and _stream_is_tty(stream)
+
+
+def _terminal_colors(stdout: TextIO | None, stderr: TextIO | None) -> bool:
+    """True when both streams are an interactive color terminal, the one rule for log lines and startup prints."""
+    return _color_enabled(stdout) and _color_enabled(stderr)
+
+
+def terminal_text(message: str) -> str:
+    """The message with its ANSI colors kept only on a color terminal, by the rule the plain log format uses."""
+    return message if _terminal_colors(sys.stdout, sys.stderr) else _ANSI_ESCAPE.sub("", message)
+
+
+def _plain_log_format(stdout: TextIO | None, stderr: TextIO | None) -> str:
+    """The plain-text log format, colorized only when both streams are an interactive terminal."""
+    return _COLOR_LOG_FORMAT if _terminal_colors(stdout, stderr) else _PLAIN_LOG_FORMAT
 
 
 class LevelRoutingStreamHandler(logging.StreamHandler):
@@ -676,8 +686,8 @@ class LevelRoutingStreamHandler(logging.StreamHandler):
         super().emit(record)
 
 
-def _parse_json_logs_env(value: str | None) -> bool:
-    """Strict opt-in parse for the JSON_LOGS env var: only "true" (any case) enables JSON logs.
+def _parse_env_flag(value: str | None) -> bool:
+    """Strict opt-in parse for a boolean env var such as JSON_LOGS: only "true" (any case) enables it.
 
     Matches the reader in litellm-proxy-extras/_logging.py. The previous
     bool(os.getenv(...)) treated any non-empty value, including "false" and "0",
@@ -690,7 +700,18 @@ def resolve_log_level(log_level: str) -> int:
     return getattr(logging, log_level.upper())
 
 
-json_logs: Final = _parse_json_logs_env(os.getenv("JSON_LOGS"))
+json_logs: Final = _parse_env_flag(os.getenv("JSON_LOGS"))
+suppress_startup_output: Final = _parse_env_flag(os.getenv("LITELLM_SUPPRESS_STARTUP_OUTPUT"))
+
+
+class StartupOutputSettings(TypedDict, total=False):
+    json_logs: ReadOnly[object]
+    suppress_startup_output: ReadOnly[object]
+
+
+STARTUP_OUTPUT_SETTINGS: Final = TypeAdapter(StartupOutputSettings)
+
+
 # Create a handler for the logger (you may need to adapt this based on your needs)
 log_level: Final = os.getenv("LITELLM_LOG", "DEBUG")
 numeric_level: Final[int] = resolve_log_level(log_level)
@@ -777,7 +798,7 @@ class JsonFormatter(Formatter):
         return dt.isoformat()
 
     def format(self, record):
-        message_str: Final = record.getMessage()
+        message_str: Final = _ANSI_ESCAPE.sub("", record.getMessage())
         json_record: Final[dict[str, object]] = {
             "message": message_str,
             "level": record.levelname,
@@ -833,12 +854,14 @@ class CorrelationPlainFormatter(logging.Formatter):
     """Appends trace_id/session_id to plain-text log lines stamped by CorrelationContextFilter.
 
     Mirrors JsonFormatter's handling of these two fields so request_correlation_in_logs
-    behaves the same whether or not json_logs is enabled.
+    behaves the same whether or not json_logs is enabled. Unless it was built with the color format,
+    it also drops the ANSI color codes a message carries, which a piped log would store as text.
     """
 
     def format(self, record: logging.LogRecord) -> str:
         rendered: Final = super().format(record)
-        formatted: Final = rendered if _is_redacted(record) else redact_string(rendered)
+        uncolored: Final = rendered if self._fmt == _COLOR_LOG_FORMAT else _ANSI_ESCAPE.sub("", rendered)
+        formatted: Final = uncolored if _is_redacted(record) else redact_string(uncolored)
         trace_id: Final = getattr(record, "trace_id", None)
         session_id: Final = getattr(record, "session_id", None)
         if not trace_id and not session_id:
@@ -933,6 +956,66 @@ verbose_proxy_stdout_logger.addFilter(_diagnostic_filter)
 verbose_logger.addFilter(_diagnostic_filter)
 
 
+def print_startup_message(message: str) -> None:
+    """Write a boot-time message meant for the operator's terminal.
+
+    LITELLM_SUPPRESS_STARTUP_OUTPUT or litellm_settings.suppress_startup_output turns every one of them
+    off; a warning goes through print_startup_warning instead. Plain mode prints it with its spacing,
+    keeping the ANSI colors only on a color terminal by the same check as the plain log format, so a
+    container log never stores escape codes.
+    With JSON logs on, every line of stdout is read by a log pipeline, so the message goes out as one
+    INFO record of the proxy logger instead, on stdout like the print whatever handlers the logging
+    config gave that logger, with the ANSI color codes and surrounding blank lines removed, located at
+    the caller and emitted at any log level, whole and unredacted as the print showed it; a blank
+    spacer produces no record.
+    """
+    if litellm.suppress_startup_output is True:
+        return
+    frame: Final = inspect.currentframe()
+    _write_startup_message(message, frame.f_back if frame is not None else None, logging.INFO)
+
+
+def print_startup_warning(message: str) -> None:
+    """Write a boot-time warning as print_startup_message writes a message, even with suppress_startup_output
+    on, since it names something the operator has to fix. With JSON logs on it is a WARNING record, on
+    stdout where the print put it, so a collector that filters on the level field keeps it."""
+    frame: Final = inspect.currentframe()
+    _write_startup_message(message, frame.f_back if frame is not None else None, logging.WARNING)
+
+
+def _write_startup_message(message: str, caller: FrameType | None, level: int) -> None:
+    if not litellm.json_logs:
+        import click
+
+        click.echo(terminal_text(message))
+        return
+    text: Final = _ANSI_ESCAPE.sub("", message).strip("\n")
+    if not text:
+        return
+    record: Final = verbose_proxy_logger.makeRecord(
+        verbose_proxy_logger.name,
+        level,
+        caller.f_code.co_filename if caller is not None else __file__,
+        caller.f_lineno if caller is not None else 0,
+        text,
+        (),
+        None,
+        func=caller.f_code.co_name if caller is not None else None,
+    )
+    if not _process_record(record, base64_limit=_get_max_base64_length_stdout_log(), text_limit=0, redact=False):
+        return
+    _startup_json_handler().handle(record)
+
+
+def _startup_json_handler() -> logging.Handler:
+    """The proxy's JSON handler on stdout, filters included, for one startup message or warning."""
+    handler: Final = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(JsonFormatter())
+    handler.addFilter(_secret_filter)
+    handler.addFilter(_correlation_filter)
+    return handler
+
+
 def _suppress_loggers():
     """Suppress noisy loggers at INFO level"""
     # Suppress httpx request logging at INFO level
@@ -1022,217 +1105,6 @@ def _get_loggers_to_initialize():
     return loggers
 
 
-# ----------------------------------------------------------------------------
-# Optional file logging (write logs to a directory, rotated daily)
-# ----------------------------------------------------------------------------
-
-DEFAULT_LOG_FILENAME = "litellm.log"
-UVICORN_LOG_FILENAME = "uvicorn.log"
-
-
-def _get_log_retention_days() -> int:
-    raw = os.getenv("LITELLM_LOG_RETENTION_DAYS", "14")
-    try:
-        return max(0, int(raw))
-    except ValueError:
-        return 14
-
-
-def _resolve_app_log_file() -> str | None:
-    """Resolve the application log file path from env, or None if unconfigured.
-
-    LITELLM_LOG_FILE (explicit path) wins; otherwise LITELLM_LOG_DIR/litellm.log.
-    """
-    log_file = os.getenv("LITELLM_LOG_FILE")
-    if log_file:
-        return log_file
-    log_dir = os.getenv("LITELLM_LOG_DIR")
-    if log_dir:
-        return os.path.join(log_dir, DEFAULT_LOG_FILENAME)
-    return None
-
-
-def resolve_uvicorn_log_file() -> str | None:
-    """Resolve the uvicorn log file path (separate from the application log)."""
-    log_dir = os.getenv("LITELLM_LOG_DIR")
-    if log_dir:
-        return os.path.join(log_dir, UVICORN_LOG_FILENAME)
-    return None
-
-
-def _get_file_text_formatter() -> logging.Formatter:
-    """Plain (no ANSI color) formatter for log files."""
-    return logging.Formatter(
-        "%(asctime)s - %(name)s:%(levelname)s: %(filename)s:%(lineno)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-
-
-def _lockfile_for(path: str) -> str:
-    """Sidecar lock file path used to serialize rotation across processes."""
-    parent = os.path.dirname(path) or "."
-    return os.path.join(parent, "." + os.path.basename(path) + ".rotate.lock")
-
-
-class _SharedRotatingFileHandler(TimedRotatingFileHandler):
-    """Daily-rotating file handler safe for multiple processes sharing one file.
-
-    All processes append to the same file. Rotation is emit-driven (no background
-    threads, so it is fork/spawn-safe under multi-worker servers): the first
-    process to log after local midnight tries a short-lived advisory ``flock`` on
-    ``lockfile`` and, if it wins, renames the base file to a dated one. Peers that
-    lose the race - or that already see the rotated file - detect the inode change
-    on their next ``emit`` and reopen the new file (``WatchedFileHandler``
-    behavior). Fork-safe because the lock fd is opened fresh per attempt and never
-    held between rotations.
-    """
-
-    def __init__(
-        self,
-        filename: str,
-        lockfile: str,
-        backupCount: int = 14,
-        encoding: str = "utf-8",
-        delay: bool = True,
-        use_json: bool = False,
-    ) -> None:
-        parent = os.path.dirname(filename)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        super().__init__(
-            filename,
-            when="midnight",
-            backupCount=backupCount,
-            encoding=encoding,
-            delay=delay,
-        )
-        self._lockfile = lockfile
-        self.addFilter(_secret_filter)
-        self.setLevel(numeric_level)
-        self.setFormatter(JsonFormatter() if use_json else _get_file_text_formatter())
-        self._dev: int | None = None
-        self._ino: int | None = None
-        self._update_dev_ino()
-
-    def _stat_base(self):
-        try:
-            st = os.stat(self.baseFilename)
-            return st.st_dev, st.st_ino
-        except FileNotFoundError:
-            return None, None
-
-    def _update_dev_ino(self) -> None:
-        self._dev, self._ino = self._stat_base()
-
-    def _reopen_if_changed(self) -> None:
-        """Reopen the base file if a peer rotated it out from under us."""
-        dev, ino = self._stat_base()
-        if (
-            dev is not None
-            and self._dev is not None
-            and (dev != self._dev or ino != self._ino)
-            and self.stream is not None
-        ):
-            self.stream.flush()
-            self.stream.close()
-            self.stream = self._open()
-            self._update_dev_ino()
-
-    def emit(self, record: logging.LogRecord) -> None:
-        try:
-            self._reopen_if_changed()
-        except (OSError, ValueError):
-            pass
-        super().emit(record)  # BaseRotatingHandler.emit -> shouldRollover -> doRollover, then write
-        if self._dev is None and self.stream is not None:
-            # First open under delay=True - record file identity now.
-            self._update_dev_ino()
-
-    def doRollover(self) -> None:
-        """Rotate under a cross-process lock; only the lock winner renames.
-
-        Invoked by the base ``emit`` when the period has elapsed (or directly by
-        tests). Losers just adopt the peer's freshly rotated file and reschedule.
-        """
-        fd = os.open(self._lockfile, os.O_CREAT | os.O_RDWR, 0o644)
-        try:
-            if _try_lock_nb(fd):
-                try:
-                    _, ino = self._stat_base()
-                    # Only rename if nobody has rotated this file already.
-                    if ino is not None and (self._ino is None or ino == self._ino):
-                        super().doRollover()
-                        self._update_dev_ino()
-                        return
-                finally:
-                    _unlock(fd)
-        finally:
-            os.close(fd)
-        # Lost the race or already rotated: adopt the new file, defer next attempt.
-        self._reopen_if_changed()
-        self.rolloverAt = self.computeRollover(int(time.time()))
-
-    # Test/utility hook: force a gated rotation attempt now.
-    def _maybe_rollover(self) -> None:
-        self.doRollover()
-
-
-def _build_file_handler(path: str, use_json: bool) -> _SharedRotatingFileHandler:
-    return _SharedRotatingFileHandler(
-        filename=path,
-        lockfile=_lockfile_for(path),
-        backupCount=_get_log_retention_days(),
-        use_json=use_json,
-    )
-
-
-def _get_app_file_handler() -> _SharedRotatingFileHandler | None:
-    return next(
-        (handler for handler in verbose_proxy_logger.handlers if isinstance(handler, _SharedRotatingFileHandler)),
-        None,
-    )
-
-
-def add_file_logging(path: str | None = None, use_json: bool | None = None) -> str | None:
-    """Attach a daily-rotating file handler to the litellm loggers.
-
-    Resolves ``path`` from the argument, then from LITELLM_LOG_FILE / LITELLM_LOG_DIR.
-    Returns the resolved path (or None if file logging is not configured).
-    Idempotent: an existing litellm-managed file handler is replaced, not duplicated.
-    """
-    resolved = path or _resolve_app_log_file()
-    if not resolved:
-        return None
-    if use_json is None:
-        use_json = json_logs
-
-    # Attach to the same core loggers as the stream handler. Avoid
-    # _get_loggers_to_initialize() here: it reads litellm.success_callback,
-    # which is not defined yet during the import-time call.
-    loggers = [verbose_logger, verbose_router_logger, verbose_proxy_logger]
-    previous_handler = _get_app_file_handler()
-    if previous_handler is not None:
-        for lg in loggers:
-            if previous_handler in lg.handlers:
-                lg.removeHandler(previous_handler)
-
-    file_handler = _build_file_handler(resolved, use_json)
-    for lg in loggers:
-        lg.addHandler(file_handler)
-    return resolved
-
-
-def _reattach_app_file_handler(use_json: bool) -> None:
-    """Re-attach the file handler after loggers were cleared/re-initialized."""
-    if _resolve_app_log_file() is not None:
-        add_file_logging(use_json=use_json)
-
-
-# Enable file logging at import time when LITELLM_LOG_DIR / LITELLM_LOG_FILE is set,
-# so simply exporting the env var and starting the proxy is enough.
-add_file_logging()
-
-
 def _initialize_loggers_with_handler(handler: logging.Handler):
     """
     Initialize all loggers with a handler
@@ -1246,98 +1118,68 @@ def _initialize_loggers_with_handler(handler: logging.Handler):
         lg.handlers.clear()  # remove any existing handlers
         lg.addHandler(handler)  # add JSON formatter handler
         lg.propagate = False  # prevent bubbling to parent/root
+    if (configured_level := os.getenv("LITELLM_LOG")) is not None:
+        logging.getLogger().setLevel(resolve_log_level(configured_level))
 
 
-def _get_uvicorn_log_config(use_json: bool):
+def _get_uvicorn_json_log_config():
     """
-    Generate a uvicorn log_config dict.
+    Generate a uvicorn log_config dictionary that applies JSON formatting to all loggers.
 
-    - In JSON mode all uvicorn loggers use the JSON formatter.
-    - In text mode stdout keeps uvicorn's standard (optionally colored) formatters.
-    - When LITELLM_LOG_DIR is set, a daily-rotating file handler writing to
-      ``<dir>/uvicorn.log`` (separate from the application log) is added so
-      uvicorn access/error logs also land on disk.
+    This ensures that uvicorn's access logs, error logs, and all application logs
+    are formatted as JSON when json_logs is enabled.
     """
     json_formatter_class: Final = "litellm._logging.JsonFormatter"
+
+    # Use the module-level log_level variable for consistency
     uvicorn_log_level: Final = log_level.upper()
-    default_fmt: Final = "%(asctime)s %(levelprefix)s %(message)s"
-    access_fmt: Final = '%(asctime)s %(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s'
 
-    formatters: Final[dict[str, Any]] = {
-        "json": {"()": json_formatter_class},
-        "default": {
-            "()": "uvicorn.logging.DefaultFormatter",
-            "fmt": default_fmt,
-            "use_colors": True,
-        },
-        "access": {
-            "()": "uvicorn.logging.AccessFormatter",
-            "fmt": access_fmt,
-            "use_colors": True,
-        },
-    }
-
-    stdout_default_formatter: Final = "json" if use_json else "default"
-    stdout_access_formatter: Final = "json" if use_json else "access"
-    uvicorn_log_file: Final = resolve_uvicorn_log_file()
-    file_handler: Final[dict[str, Any]] = (
-        {
-            "file": {
-                "()": "litellm._logging._SharedRotatingFileHandler",
-                "filename": uvicorn_log_file,
-                "lockfile": _lockfile_for(uvicorn_log_file),
-                "backupCount": _get_log_retention_days(),
-                "use_json": use_json,
-            }
-        }
-        if uvicorn_log_file is not None
-        else {}
-    )
-    handlers: Final[dict[str, Any]] = {
-        "default": {
-            "formatter": stdout_default_formatter,
-            "class": "logging.StreamHandler",
-            "stream": "ext://sys.stdout",
-        },
-        "access": {
-            "formatter": stdout_access_formatter,
-            "class": "logging.StreamHandler",
-            "stream": "ext://sys.stdout",
-        },
-        **file_handler,
-    }
-
-    default_handlers: Final = ["default", "file"] if uvicorn_log_file is not None else ["default"]
-    access_handlers: Final = ["access", "file"] if uvicorn_log_file is not None else ["access"]
-
-    return {
+    log_config: Final = {
         "version": 1,
         "disable_existing_loggers": False,
-        "formatters": formatters,
-        "handlers": handlers,
+        "formatters": {
+            "json": {
+                "()": json_formatter_class,
+            },
+            "default": {
+                "()": json_formatter_class,
+            },
+            "access": {
+                "()": json_formatter_class,
+            },
+        },
+        "handlers": {
+            "default": {
+                "formatter": "json",
+                "class": "logging.StreamHandler",
+                "stream": "ext://sys.stdout",
+            },
+            "access": {
+                "formatter": "access",
+                "class": "logging.StreamHandler",
+                "stream": "ext://sys.stdout",
+            },
+        },
         "loggers": {
             "uvicorn": {
-                "handlers": default_handlers,
+                "handlers": ["default"],
                 "level": uvicorn_log_level,
                 "propagate": False,
             },
             "uvicorn.error": {
-                "handlers": default_handlers,
+                "handlers": ["default"],
                 "level": uvicorn_log_level,
                 "propagate": False,
             },
             "uvicorn.access": {
-                "handlers": access_handlers,
+                "handlers": ["access"],
                 "level": uvicorn_log_level,
                 "propagate": False,
             },
         },
     }
 
-
-def _get_uvicorn_json_log_config():
-    """Backwards-compatible JSON uvicorn log config (delegates to _get_uvicorn_log_config)."""
-    return _get_uvicorn_log_config(use_json=True)
+    return log_config
 
 
 def turn_on_json() -> None:
@@ -1350,10 +1192,6 @@ def turn_on_json() -> None:
     handler.setLevel(numeric_level)
     handler.setFormatter(JsonFormatter())
     _initialize_loggers_with_handler(handler)
-    # Keep file logging (now JSON-formatted) after handlers were cleared above.
-    _reattach_app_file_handler(use_json=True)
-    # Keep file logging (now JSON-formatted) after handlers were cleared above
-    _reattach_app_file_handler(use_json=True)
     # Set up exception handlers
     _setup_json_exception_handlers(JsonFormatter())
 

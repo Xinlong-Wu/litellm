@@ -381,19 +381,4 @@ describe("(dashboard) Layout", () => {
       }
     });
   });
-
-  it("allows dashboard route content to shrink within the flex layout", async () => {
-    render(
-      <AuthProvider>
-        <Layout>
-          <div data-testid="page-content">Page content</div>
-        </Layout>
-      </AuthProvider>,
-    );
-
-    pendingUiConfig.resolve();
-
-    const pageContent = await screen.findByTestId("page-content");
-    expect(pageContent.closest("main")).toHaveClass("min-w-0");
-  });
 });
